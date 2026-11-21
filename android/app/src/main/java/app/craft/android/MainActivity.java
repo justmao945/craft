@@ -1,0 +1,39 @@
+package app.craft.android;
+
+import android.os.Bundle;
+import android.view.View;
+import android.view.ViewGroup;
+
+import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowInsetsCompat;
+import androidx.core.view.WindowInsetsControllerCompat;
+
+import com.getcapacitor.BridgeActivity;
+
+public class MainActivity extends BridgeActivity {
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        registerPlugin(CraftProjectPlugin.class);
+        registerPlugin(CraftRuntimePlugin.class);
+        super.onCreate(savedInstanceState);
+        View webView = getBridge().getWebView();
+        WindowInsetsControllerCompat systemBars = new WindowInsetsControllerCompat(getWindow(), webView);
+        systemBars.setAppearanceLightStatusBars(true);
+        systemBars.setAppearanceLightNavigationBars(true);
+        ViewCompat.setOnApplyWindowInsetsListener(webView, (view, windowInsets) -> {
+            int top = windowInsets.getInsets(WindowInsetsCompat.Type.statusBars()).top;
+            int navigationBottom = windowInsets.getInsets(WindowInsetsCompat.Type.navigationBars()).bottom;
+            int imeBottom = windowInsets.getInsets(WindowInsetsCompat.Type.ime()).bottom;
+            int bottom = Math.max(navigationBottom, imeBottom);
+            ViewGroup.MarginLayoutParams layout = (ViewGroup.MarginLayoutParams) view.getLayoutParams();
+            if (layout.topMargin != top || layout.bottomMargin != bottom) {
+                layout.topMargin = top;
+                layout.bottomMargin = bottom;
+                view.setLayoutParams(layout);
+            }
+            return windowInsets;
+        });
+        ViewCompat.requestApplyInsets(webView);
+    }
+}
