@@ -5,7 +5,7 @@
   "description": "On-device Android app workshop with a self-developed coding agent",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "npm run runtime:build && vite",
     "runtime:build": "node scripts/build-runtime.mjs",
     "build": "npm run runtime:build && tsc -b && vite build",
     "lint": "oxlint src vite.config.ts capacitor.config.ts",

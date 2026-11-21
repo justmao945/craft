@@ -1,5 +1,5 @@
 import { Capacitor, registerPlugin } from '@capacitor/core'
-import type { AgentConfig, AppDescriptor, BuildArtifact, Snapshot, Workspace } from '../types'
+import type { AgentConfig, AppDescriptor, BuildArtifact, ChatMessage, Snapshot, Workspace } from '../types'
 
 interface CraftProjectPlugin {
   listApps(): Promise<{ apps: AppDescriptor[] }>
@@ -15,6 +15,8 @@ interface CraftProjectPlugin {
   getReleaseBuild(options: { appId: string }): Promise<BuildArtifact>
   publish(options: { appId: string; snapshotId: string }): Promise<{ app: AppDescriptor }>
   rollback(options: { appId: string; snapshotId: string }): Promise<{ app: AppDescriptor; snapshot: Snapshot }>
+  getConversation(options: { appId: string }): Promise<{ json: string }>
+  saveConversation(options: { appId: string; json: string }): Promise<{ ok: boolean }>
   setAgentConfig(options: AgentConfig): Promise<{ ok: boolean }>
   getAgentConfig(): Promise<AgentConfig>
 }
@@ -51,6 +53,7 @@ interface BrowserState {
   sources: Record<string, Record<string, string>>
   builds: Record<string, BuildArtifact>
   drafts: Record<string, string>
+  conversations: Record<string, ChatMessage[]>
   config: AgentConfig
 }
 
@@ -67,8 +70,9 @@ function loadBrowserState(): BrowserState {
   if (browserState) return browserState
   const saved = localStorage.getItem('craft-browser-state-v1')
   browserState = saved ? JSON.parse(saved) as BrowserState : {
-    apps: [], workspaces: {}, snapshots: {}, sources: {}, builds: {}, drafts: {}, config: defaultConfig,
+    apps: [], workspaces: {}, snapshots: {}, sources: {}, builds: {}, drafts: {}, conversations: {}, config: defaultConfig,
   }
+  browserState.conversations ??= {}
   return browserState
 }
 
@@ -213,6 +217,24 @@ export const projectStore = {
     state.sources[snapshot.id] = { ...state.workspaces[appId] }
     const app = state.apps.find((item) => item.id === appId)
     if (app) app.releaseSnapshotId = snapshot.id
+    persistBrowserState()
+  },
+
+  async getConversation(appId: string): Promise<ChatMessage[]> {
+    if (isNative) {
+      const { json } = await nativeProject.getConversation({ appId })
+      return JSON.parse(json) as ChatMessage[]
+    }
+    return loadBrowserState().conversations[appId] ?? []
+  },
+
+  async saveConversation(appId: string, messages: ChatMessage[]): Promise<void> {
+    const persisted = messages.filter((message) => message.role !== 'status')
+    if (isNative) {
+      await nativeProject.saveConversation({ appId, json: JSON.stringify(persisted) })
+      return
+    }
+    loadBrowserState().conversations[appId] = persisted
     persistBrowserState()
   },
 

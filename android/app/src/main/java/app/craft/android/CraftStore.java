@@ -30,6 +30,7 @@ import java.util.UUID;
  *   <filesDir>/craft/<appId>/builds/<id>/{app.js,app.css}  immutable builds
  *   <filesDir>/craft/<appId>/draft.json               { buildId }
  *   <filesDir>/craft/<appId>/release.json             { buildId }
+ *   <filesDir>/craft/<appId>/conversation.json        single project-scoped chat history
  *   <filesDir>/craft/agent-config.json                { apiKey(encrypted), baseUrl, model, reasoningEffort }
  */
 public class CraftStore {
@@ -44,6 +45,7 @@ public class CraftStore {
     private static final String DRAFT_POINTER = "draft.json";
     private static final String RELEASE_POINTER = "release.json";
     private static final String AGENT_CONFIG_FILE = "agent-config.json";
+    private static final String CONVERSATION_FILE = "conversation.json";
     private static final String META_FILE = "meta.json";
     private static final String BUILD_JS = "app.js";
     private static final String BUILD_CSS = "app.css";
@@ -294,6 +296,24 @@ public class CraftStore {
 
     private File workspaceDir(String appId) {
         return new File(appDir(appId), WORKSPACE_DIR);
+    }
+
+    // ---------------------------------------------------------- conversation
+
+    /** One conversation per app; stored outside the workspace so it never ships with app source. */
+    public synchronized String readConversation(String appId) throws IOException {
+        requireApp(appId);
+        File file = new File(appDir(appId), CONVERSATION_FILE);
+        if (!file.isFile()) {
+            return "[]";
+        }
+        return readString(file);
+    }
+
+    public synchronized void writeConversation(String appId, String json) throws IOException, JSONException {
+        requireApp(appId);
+        new JSONArray(json); // reject malformed payloads before they corrupt the saved history
+        atomicWriteString(new File(appDir(appId), CONVERSATION_FILE), json);
     }
 
     private File appDir(String appId) {

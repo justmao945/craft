@@ -6,10 +6,11 @@ Craft 是一个 Android 端的应用工坊验证项目：默认进入聊天式�
 
 ## 已实现
 
-- 聊天式工作区、模板广场、项目列表与个人设置
+- 项目维度的单会话工作区（每个项目一份持久对话）、模板广场、项目列表与个人设置
 - 广场分类筛选及模板需求回填
 - Android 状态栏、导航栏与输入法 Insets 适配
 - 自研 AgentRuntime：模型响应 Schema 校验、工具调用、18 轮上限、发布确认
+- 主 agent 可通过 `delegate_task` 委派子 agent：独立上下文、8 轮上限、禁止发布与再委派
 - 多文件 TS/TSX 项目与相对导入
 - esbuild-wasm + Web Worker 本地编译
 - 独立 Android Preview WebView
@@ -46,7 +47,7 @@ npm run dev
 ```bash
 npm run build
 npm run cap:sync
-export JAVA_HOME=$HOME/.local/share/open-bobo-toolchain/jdk
+export JAVA_HOME=$HOME/.local/share/craft-toolchain/jdk
 cd android
 ./gradlew assembleDebug
 ```
@@ -60,7 +61,7 @@ android/app/build/outputs/apk/debug/app-debug.apk
 安装并启动：
 
 ```bash
-export ANDROID_SDK_ROOT=$HOME/.local/share/open-bobo-toolchain/android-sdk
+export ANDROID_SDK_ROOT=$HOME/.local/share/craft-toolchain/android-sdk
 $ANDROID_SDK_ROOT/platform-tools/adb install -r android/app/build/outputs/apk/debug/app-debug.apk
 $ANDROID_SDK_ROOT/platform-tools/adb shell am start -n app.craft.android/.MainActivity
 ```
@@ -69,7 +70,7 @@ $ANDROID_SDK_ROOT/platform-tools/adb shell am start -n app.craft.android/.MainAc
 
 `src/agent/AgentRuntime.ts` 拥有完整开发循环，不依赖外部 Coding Agent Harness：
 
-1. 解析用户目标并选择或创建 App。
+1. 会话与项目一一对应：未绑定时仅能创建新项目，绑定后只操作该项目。
 2. 通过受控工具读写项目。
 3. 编译 Workspace 并保存 Draft Build。
 4. 打开真实 Preview WebView。
@@ -81,6 +82,7 @@ $ANDROID_SDK_ROOT/platform-tools/adb shell am start -n app.craft.android/.MainAc
 
 ## 关键边界
 
+- 会话与项目一一对应，保存在项目私有目录（`conversation.json`），不进入应用源码与 Release。
 - 普通 App 无项目写入、版本发布、签名或其他 App 数据权限。
 - Draft 与 Release 数据命名空间分离。
 - 浏览器适配器只用于开发，不作为 Android 安全边界。

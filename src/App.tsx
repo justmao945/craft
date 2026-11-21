@@ -3,7 +3,7 @@ import type { FormEvent, RefObject } from 'react'
 import {
   ArrowLeft, ArrowUp, BarChart3, Blocks, BookOpen, CalendarCheck2, Check, ChevronRight, CircleUserRound,
   Clock3, Compass, FlaskConical, FolderGit2, GlassWater, LayoutGrid, Lightbulb,
-  LoaderCircle, Map, MessageCircle, MessageSquare, NotebookPen, Rocket,
+  LoaderCircle, Map, MessageCircle, MessageSquare, NotebookPen, Plus, Rocket,
   ShieldCheck, Sparkles, Timer, X,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
@@ -45,6 +45,8 @@ window.addEventListener('unhandledrejection',event=>window.__craftLogs.push('rej
 }
 
 type Tab = 'chat' | 'discover' | 'apps' | 'profile'
+
+const NEW_PROJECT_KEY = '__new__'
 
 interface Inspiration {
   name: string
@@ -98,27 +100,84 @@ export default function App() {
   const iframeRef = useRef<HTMLIFrameElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const composerRef = useRef<HTMLTextAreaElement>(null)
+  // Keep refs in lockstep with state: agent hooks and persistence run outside render.
+  const messagesRef = useRef<ChatMessage[]>([initialMessage])
+  const activeAppIdRef = useRef<string | undefined>(undefined)
+  const agentsRef = useRef(new globalThis.Map<string, AgentRuntime>())
 
   const refreshApps = useCallback(async () => {
     setApps(await projectStore.listApps())
   }, [])
 
-  const addMessage = useCallback((role: ChatMessage['role'], text: string) => {
-    const message = { id: crypto.randomUUID(), role, text, createdAt: Date.now() }
-    setMessages((current) => current.length === 1 && current[0].id === 'welcome' ? [message] : [...current, message])
+  const setConversation = useCallback((next: ChatMessage[]) => {
+    messagesRef.current = next
+    setMessages(next)
+    if (activeAppIdRef.current) void projectStore.saveConversation(activeAppIdRef.current, next)
   }, [])
 
-  const agent = useMemo(() => new AgentRuntime({
+  const addMessage = useCallback((role: ChatMessage['role'], text: string) => {
+    const current = messagesRef.current
+    const next = current.length === 1 && current[0].id === 'welcome'
+      ? [{ id: crypto.randomUUID(), role, text, createdAt: Date.now() }]
+      : [...current, { id: crypto.randomUUID(), role, text, createdAt: Date.now() }]
+    setConversation(next)
+  }, [setConversation])
+
+  const agentHooks = useMemo(() => ({
     onStatus: setStatus,
-    onAssistant: (text) => addMessage('assistant', text),
+    onAssistant: (text: string) => addMessage('assistant', text),
     onAppsChanged: refreshApps,
-    onAppSelected: (app) => setActiveAppId(app.id),
-    confirm: (action) => {
+    onAppSelected: (app: AppDescriptor) => {
+      // The unbound agent just created its project: adopt it under the project's key.
+      const pending = agentsRef.current.get(NEW_PROJECT_KEY)
+      if (pending) {
+        agentsRef.current.delete(NEW_PROJECT_KEY)
+        agentsRef.current.set(app.id, pending)
+      }
+      activeAppIdRef.current = app.id
+      setActiveAppId(app.id)
+      void projectStore.saveConversation(app.id, messagesRef.current)
+    },
+    confirm: (action: string) => {
       const { promise, resolve } = Promise.withResolvers<boolean>()
       setConfirmation({ action, resolve })
       return promise
     },
   }), [addMessage, refreshApps])
+
+  // One agent per project; its model context survives tab switches, seeded from history on cold start.
+  const getAgent = useCallback((app?: AppDescriptor): AgentRuntime => {
+    const key = app?.id ?? NEW_PROJECT_KEY
+    let instance = agentsRef.current.get(key)
+    if (!instance) {
+      instance = new AgentRuntime(agentHooks, app)
+      if (app) instance.seedHistory(messagesRef.current)
+      agentsRef.current.set(key, instance)
+    }
+    return instance
+  }, [agentHooks])
+
+  const openProject = useCallback(async (app: AppDescriptor) => {
+    if (busy) return
+    const history = await projectStore.getConversation(app.id)
+    const next = history.length ? history : [initialMessage]
+    activeAppIdRef.current = app.id
+    setActiveAppId(app.id)
+    messagesRef.current = next
+    setMessages(next)
+    getAgent(app)
+    setActiveTab('chat')
+  }, [busy, getAgent])
+
+  const newProject = useCallback(() => {
+    if (busy) return
+    agentsRef.current.delete(NEW_PROJECT_KEY)
+    activeAppIdRef.current = undefined
+    setActiveAppId(undefined)
+    messagesRef.current = [initialMessage]
+    setMessages([initialMessage])
+    setActiveTab('chat')
+  }, [busy])
 
   useEffect(() => {
     let active = true
@@ -215,7 +274,7 @@ export default function App() {
     setBusy(true)
     addMessage('user', prompt)
     try {
-      await agent.run(prompt)
+      await getAgent(activeApp).run(prompt)
     } catch (error) {
       addMessage('assistant', error instanceof Error ? error.message : String(error))
     } finally {
@@ -230,9 +289,16 @@ export default function App() {
     setStatus('Building the offline Todo validation app')
     try {
       const app = await createOfflineTodo()
-      setActiveAppId(app.id)
       await refreshApps()
-      addMessage('assistant', '离线 Todo 已通过多文件 TSX 编译、UI 输入/点击、语义检查、快照和发布；Android 同时验证了真实截图。未调用模型。')
+      const result: ChatMessage[] = [{
+        id: crypto.randomUUID(), role: 'assistant', createdAt: Date.now(),
+        text: '离线 Todo 已通过多文件 TSX 编译、UI 输入/点击、语义检查、快照和发布；Android 同时验证了真实截图。未调用模型。',
+      }]
+      activeAppIdRef.current = app.id
+      setActiveAppId(app.id)
+      messagesRef.current = result
+      setMessages(result)
+      await projectStore.saveConversation(app.id, result)
     } catch (error) {
       addMessage('assistant', error instanceof Error ? error.message : String(error))
     } finally {
@@ -266,27 +332,29 @@ export default function App() {
   }
 
   const activeApp = apps.find((app) => app.id === activeAppId)
-  const isWelcome = messages.length === 1 && messages[0].id === 'welcome' && !status
+  const isWelcome = !activeAppId && messages.length === 1 && messages[0].id === 'welcome' && !status
   const filteredInspirations = discoverCategory === '全部'
     ? inspirations : inspirations.filter((item) => item.category === discoverCategory)
-  const statusText = status.startsWith('Agent round') ? '正在思考…' : ({
-    create_app: '正在创建项目…', select_app: '正在打开项目…', list_files: '正在查看项目文件…',
+  const subagentStatus = status.startsWith('Subagent: ')
+  const baseStatus = subagentStatus ? status.slice('Subagent: '.length) : status
+  const statusText = (subagentStatus ? '子 agent · ' : '') + (baseStatus.startsWith('Agent round') ? '正在思考…' : ({
+    create_app: '正在创建项目…', list_files: '正在查看项目文件…',
     read_file: '正在阅读代码…', write_file: '正在编写代码…', build_app: '正在编译并打开预览…',
     inspect_preview: '正在检查界面结构…', screenshot_preview: '正在查看真实截图…',
     click_preview: '正在测试界面交互…', input_preview: '正在测试输入…', preview_logs: '正在检查运行日志…',
-    publish_app: '正在准备发布…', 'Building the offline Todo validation app': '正在运行离线验证…',
-  } as Record<string, string>)[status] ?? status
+    delegate_task: '正在委派子任务…', publish_app: '正在准备发布…',
+    'Building the offline Todo validation app': '正在运行离线验证…',
+  } as Record<string, string>)[baseStatus] ?? baseStatus)
 
   const startPrompt = (prompt: string) => {
-    setActiveTab('chat')
+    if (busy) return
+    newProject()
     setInput(prompt)
     requestAnimationFrame(() => composerRef.current?.focus())
   }
 
   const continueApp = (app: AppDescriptor) => {
-    setActiveAppId(app.id)
-    setActiveTab('chat')
-    setNotice(`已切换到 ${app.name}`)
+    void openProject(app).then(() => setNotice(`已切换到 ${app.name}`))
   }
 
   return <div className="app-shell">
@@ -369,16 +437,18 @@ export default function App() {
       {apps.length === 0 ? <div className="empty-projects">
         <span><Lightbulb size={29} /></span><h2>下一个应用，从一句话开始</h2><p>告诉 Craft 你的想法，它会完成代码、预览和测试。</p>
         <button className="primary-button" onClick={() => startPrompt('')}>开始第一个项目<ArrowUp size={17} /></button>
-      </div> : <section className="project-list" aria-label="我的应用项目">
+      </div> : <>
+        <button className="primary-button new-project-button" disabled={busy} onClick={newProject}><Plus size={17} />新建项目</button>
+        <section className="project-list" aria-label="我的应用项目">
         {apps.map((app, index) => <article className="project-row" key={app.id}>
           <button className="project-open" disabled={!app.releaseSnapshotId} onClick={() => void runtime.openRelease(app.id, app.name)}>
             <span className={`project-icon tone-${index % 4}`}><Blocks size={22} /></span>
             <span className="project-info"><strong>{app.name}</strong><small><i className={app.releaseSnapshotId ? 'published' : ''} />{app.releaseSnapshotId ? '已发布' : '开发中'} · {new Intl.DateTimeFormat('zh-CN', { month: 'short', day: 'numeric' }).format(app.updatedAt)}</small></span>
             {app.releaseSnapshotId ? <ChevronRight className="project-chevron" size={18} /> : null}
           </button>
-          <button className="project-edit" aria-label={`继续开发 ${app.name}`} onClick={() => continueApp(app)}><MessageSquare size={18} /></button>
+          <button className="project-edit" aria-label={`继续开发 ${app.name}`} disabled={busy} onClick={() => continueApp(app)}><MessageSquare size={18} /></button>
         </article>)}
-      </section>}
+      </section></>}
     </main>}
 
     {!settingsOpen && activeTab === 'profile' && <main className="screen tab-screen profile-screen">

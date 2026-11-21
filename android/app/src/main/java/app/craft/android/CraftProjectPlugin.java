@@ -304,6 +304,40 @@ public class CraftProjectPlugin extends Plugin {
         }
     }
 
+    // ---------------------------------------------------------- conversation
+
+    @PluginMethod
+    public void getConversation(PluginCall call) {
+        String appId = requiredString(call, "appId", "appId");
+        if (appId == null) {
+            return;
+        }
+        try {
+            call.resolve(new JSObject().put("json", store.readConversation(appId)));
+        } catch (Exception e) {
+            call.reject("Could not read conversation: " + e.getMessage(), e);
+        }
+    }
+
+    @PluginMethod
+    public void saveConversation(PluginCall call) {
+        String appId = requiredString(call, "appId", "appId");
+        if (appId == null) {
+            return;
+        }
+        String json = call.getString("json");
+        if (json == null) {
+            call.reject("json is required");
+            return;
+        }
+        try {
+            store.writeConversation(appId, json);
+            call.resolve(new JSObject().put("ok", true));
+        } catch (Exception e) {
+            call.reject("Could not save conversation: " + e.getMessage(), e);
+        }
+    }
+
     // -------------------------------------------------------------- helpers
 
     private static String requiredString(PluginCall call, String key, String label) {

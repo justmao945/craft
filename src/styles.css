@@ -127,6 +127,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .empty-projects > span { display: grid; width: 62px; height: 62px; place-items: center; margin: 0 auto 20px; border-radius: 20px; background: #eef2eb; color: var(--green); }
 .empty-projects h2 { margin: 0; font-size: 20px; letter-spacing: -.025em; }
 .empty-projects p { max-width: 280px; margin: 12px auto 23px; color: var(--muted); font-size: 13px; line-height: 1.7; }
+.new-project-button { align-self: flex-start; margin-bottom: 14px; }
 .project-list { display: grid; gap: 0; overflow: hidden; border: 1px solid #e6e8e3; border-radius: 13px; background: white; }
 .project-row { display: flex; align-items: center; gap: 5px; border: 0; border-bottom: 1px solid #eceee9; background: white; padding: 10px 11px; }
 .project-row:last-child { border-bottom: 0; }
