@@ -1,7 +1,7 @@
 import { Capacitor } from '@capacitor/core'
 import { compileProject } from './compiler/compiler'
-import { projectStore, runtime } from './native/craft'
-import type { AppDescriptor } from './types'
+import { giftStore, runtime } from './native/craft'
+import type { Gift } from './types'
 
 const mainTsx = `import { useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
@@ -115,23 +115,23 @@ async function validateTodoPreview(): Promise<void> {
   throw new Error('Todo preview did not become ready')
 }
 
-export async function createOfflineTodo(): Promise<AppDescriptor> {
-  const count = (await projectStore.listApps()).filter((app) => app.name.startsWith('Todo 验证')).length + 1
-  const app = await projectStore.createApp(`Todo 验证 ${count}`)
+export async function createOfflineTodo(): Promise<Gift> {
+  const count = (await giftStore.listGifts()).filter((gift) => gift.name.startsWith('Todo 验证')).length + 1
+  const gift = await giftStore.createGift(`Todo 验证 ${count}`)
   const files = {
-    'app.json': JSON.stringify({ id: app.id, name: app.name, runtimeVersion: 1, entry: 'src/main.tsx', permissions: ['storage'] }, null, 2),
+    'gift.json': JSON.stringify({ id: gift.id, name: gift.name, runtimeVersion: 1, entry: 'src/main.tsx', permissions: ['storage'] }, null, 2),
     'src/main.tsx': mainTsx,
     'src/components/TodoList.tsx': todoListTsx,
     'src/styles.css': styles,
   }
-  for (const [path, content] of Object.entries(files)) await projectStore.writeFile(app.id, path, content)
+  for (const [path, content] of Object.entries(files)) await giftStore.writeFile(gift.id, path, content)
   const result = await compileProject(files)
   if (result.diagnostics.length || !result.js) throw new Error(result.diagnostics.join('\n') || 'Empty offline build')
-  await projectStore.saveBuild(app.id, undefined, result.js, result.css, true)
-  await runtime.openDraft(app.id, app.name)
+  await giftStore.saveBuild(gift.id, undefined, result.js, result.css, true)
+  await runtime.openDraft(gift.id, gift.name)
   await validateTodoPreview()
-  const snapshot = await projectStore.createSnapshot(app.id, 'Initial offline validation')
-  await projectStore.saveBuild(app.id, snapshot.id, result.js, result.css, false)
-  await projectStore.publish(app.id, snapshot.id)
-  return app
+  const snapshot = await giftStore.createSnapshot(gift.id, 'Initial offline validation')
+  await giftStore.saveBuild(gift.id, snapshot.id, result.js, result.css, false)
+  await giftStore.publish(gift.id, snapshot.id)
+  return gift
 }

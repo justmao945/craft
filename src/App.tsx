@@ -1,118 +1,95 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { FormEvent, RefObject } from 'react'
+import type { FormEvent } from 'react'
 import {
   ArrowLeft, ArrowUp, BarChart3, Blocks, BookOpen, CalendarCheck2, Check, ChevronRight, CircleUserRound,
-  Clock3, Compass, FlaskConical, FolderGit2, GlassWater, LayoutGrid, Lightbulb,
+  Clock3, Compass, FlaskConical, FolderGit2, GlassWater, Languages, LayoutGrid, Lightbulb,
   LoaderCircle, Map, MessageCircle, MessageSquare, NotebookPen, Plus, Rocket,
-  ShieldCheck, Sparkles, Timer, X,
+  ShieldCheck, Sparkles, Timer, Trash2, X,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { AgentRuntime } from './agent/AgentRuntime'
-import { projectStore, runtime, setBrowserRuntime } from './native/craft'
-import type { BrowserRuntimeHandler } from './native/craft'
+import { giftStore, runtime } from './native/craft'
 import { createOfflineTodo } from './sample'
-import type { AgentConfig, AppDescriptor, BuildArtifact, ChatMessage, Snapshot } from './types'
+import { detectLanguage, translate } from './i18n'
+import type { Language, MessageKey } from './i18n'
+import type { AgentConfig, ChatMessage, Gift, SessionState, Snapshot } from './types'
 import './styles.css'
 
-interface BrowserPreviewState {
-  appId: string
-  title: string
-  environment: 'draft' | 'release'
-  build: BuildArtifact
-  runtimeSource: string
-}
+type Tab = 'chat' | 'discover' | 'gifts' | 'profile'
 
-interface PreviewWindow extends Window {
-  __craftLogs?: string[]
-}
+const NEW_GIFT_KEY = '__new__'
+const OFFLINE_STATUS = 'Building the offline Todo validation app'
+const COMPACT_STATUS = 'Compacting earlier context into archive pages'
 
-function BrowserPreview({ preview, iframeRef, onClose }: {
-  preview: BrowserPreviewState
-  iframeRef: RefObject<HTMLIFrameElement | null>
-  onClose: () => void
-}) {
-  const escapeScript = (source: string) => source.replace(/<\/script/gi, '<\\/script')
-  const html = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>${preview.build.css}</style></head><body><div id="root"></div><script>
-window.__craftLogs=[];
-for (const level of ['log','warn','error']) { const original=console[level]; console[level]=(...args)=>{window.__craftLogs.push(level+': '+args.map(String).join(' '));original(...args)} }
-window.addEventListener('error',event=>window.__craftLogs.push('error: '+event.message));
-window.addEventListener('unhandledrejection',event=>window.__craftLogs.push('rejection: '+String(event.reason)));
-</script><script>window.CRAFT_CONTEXT=${JSON.stringify({ appId: preview.appId, environment: preview.environment })}</script><script>${escapeScript(preview.runtimeSource)}</script><script>${escapeScript(preview.build.js)}</script></body></html>`
-  return <div className="browser-preview">
-    <div className="preview-bar"><strong>{preview.title} · {preview.environment === 'draft' ? 'Draft' : 'Release'}</strong><button onClick={onClose}>关闭</button></div>
-    <iframe ref={iframeRef} title={preview.title} sandbox="allow-scripts allow-same-origin" srcDoc={html} />
-  </div>
-}
+type InspirationId = 'focus' | 'ledger' | 'habit' | 'travel' | 'words' | 'water'
+type InspirationCategory = 'productivity' | 'finance' | 'life' | 'study'
 
-type Tab = 'chat' | 'discover' | 'apps' | 'profile'
-
-const NEW_PROJECT_KEY = '__new__'
-
-interface Inspiration {
-  name: string
-  description: string
-  category: string
-  icon: LucideIcon
-  tone: string
-  prompt: string
-}
-
-const inspirations: Inspiration[] = [
-  { name: '专注计时器', description: '专注一会儿，看见每天的进步', category: '效率', icon: Timer, tone: 'mint', prompt: '做一个专注计时器，支持 25 分钟专注、休息计时、本地记录每天完成的专注次数，界面安静克制。' },
-  { name: '轻量记账', description: '简单记录，清楚每笔收支', category: '财务', icon: BarChart3, tone: 'blue', prompt: '做一个轻量记账应用，支持收入和支出分类、本地保存、月度统计和收支趋势。' },
-  { name: '习惯打卡', description: '把想坚持的事变成日常', category: '效率', icon: CalendarCheck2, tone: 'orange', prompt: '做一个习惯打卡应用，可以创建习惯、每天打卡、查看连续天数和本周完成情况。' },
-  { name: '旅行手帐', description: '收藏路上的风景和故事', category: '生活', icon: Map, tone: 'lavender', prompt: '做一个旅行手帐应用，按旅程记录地点、日期和文字，支持本地图片与回顾视图。' },
-  { name: '单词卡片', description: '利用碎片时间轻松记忆', category: '学习', icon: BookOpen, tone: 'yellow', prompt: '做一个单词卡片应用，支持正反面翻卡、认识和不认识标记、本地词库与学习进度。' },
-  { name: '喝水记录', description: '一杯一杯，完成今日目标', category: '生活', icon: GlassWater, tone: 'cyan', prompt: '做一个喝水记录应用，可以设置每日目标、快捷记录饮水量、查看今日进度和历史趋势。' },
+const inspirations: readonly { id: InspirationId; icon: LucideIcon; tone: string; category: InspirationCategory }[] = [
+  { id: 'focus', icon: Timer, tone: 'mint', category: 'productivity' },
+  { id: 'ledger', icon: BarChart3, tone: 'blue', category: 'finance' },
+  { id: 'habit', icon: CalendarCheck2, tone: 'orange', category: 'productivity' },
+  { id: 'travel', icon: Map, tone: 'lavender', category: 'life' },
+  { id: 'words', icon: BookOpen, tone: 'yellow', category: 'study' },
+  { id: 'water', icon: GlassWater, tone: 'cyan', category: 'life' },
 ]
+
+const categories = ['all', 'productivity', 'life', 'finance', 'study'] as const
 
 const chatSuggestions = [
-  { title: '做一个记账应用', subtitle: '收支记录与每月统计', icon: BarChart3, prompt: inspirations[1].prompt },
-  { title: '做一个习惯打卡', subtitle: '追踪目标与连续天数', icon: CalendarCheck2, prompt: inspirations[2].prompt },
-  { title: '做一个灵感笔记', subtitle: '随时记录，快速查找', icon: NotebookPen, prompt: '做一个灵感笔记应用，支持快速记录、标签分类、全文搜索和本地保存。' },
-]
+  { icon: BarChart3, key: 'suggestion.ledger', prompt: 'inspiration.ledger.prompt' },
+  { icon: CalendarCheck2, key: 'suggestion.habit', prompt: 'inspiration.habit.prompt' },
+  { icon: NotebookPen, key: 'suggestion.notes', prompt: 'suggestion.notes.prompt' },
+] as const
 
 function CraftMark({ size = 'normal' }: { size?: 'small' | 'normal' | 'large' }) {
   return <span className={`craft-mark ${size}`}><Blocks strokeWidth={2.2} /></span>
 }
 
-const initialMessage: ChatMessage = {
-  id: 'welcome', role: 'assistant', createdAt: Date.now(),
-  text: '告诉我你想做什么应用。我会创建源码、在本地编译，再打开真实预览进行测试。',
+function welcomeChat(language: Language): ChatMessage {
+  return { id: 'welcome', role: 'assistant', createdAt: Date.now(), text: translate(language, 'welcome.subtitle') }
 }
 
 export default function App() {
-  const [apps, setApps] = useState<AppDescriptor[]>([])
+  const [gifts, setGifts] = useState<Gift[]>([])
   const [activeTab, setActiveTab] = useState<Tab>('chat')
-  const [discoverCategory, setDiscoverCategory] = useState('全部')
+  const [discoverCategory, setDiscoverCategory] = useState<(typeof categories)[number]>('all')
   const [notice, setNotice] = useState('')
-  const [messages, setMessages] = useState<ChatMessage[]>([initialMessage])
+  const [language, setLanguage] = useState<Language>(detectLanguage)
+  const [messages, setMessages] = useState<ChatMessage[]>(() => [welcomeChat(detectLanguage())])
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState('')
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [config, setConfig] = useState<AgentConfig>({ apiKey: '', baseUrl: '', model: '', reasoningEffort: 'high' })
-  const [activeAppId, setActiveAppId] = useState<string>()
+  const [activeGiftId, setActiveGiftId] = useState<string>()
   const [versions, setVersions] = useState<Snapshot[]>([])
   const [versionsOpen, setVersionsOpen] = useState(false)
   const [confirmation, setConfirmation] = useState<{ action: string; resolve: (approved: boolean) => void }>()
-  const [browserPreview, setBrowserPreview] = useState<BrowserPreviewState>()
-  const iframeRef = useRef<HTMLIFrameElement>(null)
+  const [deleteCandidate, setDeleteCandidate] = useState<string>()
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const composerRef = useRef<HTMLTextAreaElement>(null)
+  const sessionRef = useRef<SessionState>({ drafts: {} })
+  const sessionReady = useRef(false)
   // Keep refs in lockstep with state: agent hooks and persistence run outside render.
-  const messagesRef = useRef<ChatMessage[]>([initialMessage])
-  const activeAppIdRef = useRef<string | undefined>(undefined)
+  const messagesRef = useRef<ChatMessage[]>(messages)
+  const activeGiftIdRef = useRef<string | undefined>(undefined)
   const agentsRef = useRef(new globalThis.Map<string, AgentRuntime>())
 
-  const refreshApps = useCallback(async () => {
-    setApps(await projectStore.listApps())
+  const t = useCallback((key: MessageKey, vars: Record<string, string | number> = {}) => translate(language, key, vars), [language])
+  const locale = language === 'zh' ? 'zh-CN' : 'en'
+
+  const refreshGifts = useCallback(async () => {
+    setGifts(await giftStore.listGifts())
+  }, [])
+
+  const persistSession = useCallback(() => {
+    if (sessionReady.current) void giftStore.saveSession(sessionRef.current)
   }, [])
 
   const setConversation = useCallback((next: ChatMessage[]) => {
     messagesRef.current = next
     setMessages(next)
-    if (activeAppIdRef.current) void projectStore.saveConversation(activeAppIdRef.current, next)
+    if (activeGiftIdRef.current) void giftStore.saveConversation(activeGiftIdRef.current, next)
   }, [])
 
   const addMessage = useCallback((role: ChatMessage['role'], text: string) => {
@@ -126,70 +103,121 @@ export default function App() {
   const agentHooks = useMemo(() => ({
     onStatus: setStatus,
     onAssistant: (text: string) => addMessage('assistant', text),
-    onAppsChanged: refreshApps,
-    onAppSelected: (app: AppDescriptor) => {
-      // The unbound agent just created its project: adopt it under the project's key.
-      const pending = agentsRef.current.get(NEW_PROJECT_KEY)
+    onGiftsChanged: refreshGifts,
+    onGiftSelected: (gift: Gift) => {
+      // The unbound agent just created its Gift: adopt it under the Gift's key.
+      const pending = agentsRef.current.get(NEW_GIFT_KEY)
       if (pending) {
-        agentsRef.current.delete(NEW_PROJECT_KEY)
-        agentsRef.current.set(app.id, pending)
+        agentsRef.current.delete(NEW_GIFT_KEY)
+        agentsRef.current.set(gift.id, pending)
       }
-      activeAppIdRef.current = app.id
-      setActiveAppId(app.id)
-      void projectStore.saveConversation(app.id, messagesRef.current)
+      activeGiftIdRef.current = gift.id
+      setActiveGiftId(gift.id)
+      void giftStore.saveConversation(gift.id, messagesRef.current)
     },
     confirm: (action: string) => {
       const { promise, resolve } = Promise.withResolvers<boolean>()
       setConfirmation({ action, resolve })
       return promise
     },
-  }), [addMessage, refreshApps])
+    onContext: async (jsonl: string) => {
+      const giftId = activeGiftIdRef.current
+      if (giftId) await giftStore.saveModelContext(giftId, jsonl)
+    },
+    onArchive: async (jsonl: string) => {
+      const giftId = activeGiftIdRef.current
+      if (giftId) await giftStore.archiveModelContext(giftId, jsonl)
+    },
+  }), [addMessage, refreshGifts])
 
-  // One agent per project; its model context survives tab switches, seeded from history on cold start.
-  const getAgent = useCallback((app?: AppDescriptor): AgentRuntime => {
-    const key = app?.id ?? NEW_PROJECT_KEY
+  // One agent per Gift; full JSONL context is restored losslessly on cold start.
+  const getAgent = useCallback(async (gift?: Gift): Promise<AgentRuntime> => {
+    const key = gift?.id ?? NEW_GIFT_KEY
     let instance = agentsRef.current.get(key)
     if (!instance) {
-      instance = new AgentRuntime(agentHooks, app)
-      if (app) instance.seedHistory(messagesRef.current)
+      instance = new AgentRuntime(agentHooks, gift)
+      if (gift) {
+        const jsonl = await giftStore.getModelContext(gift.id)
+        if (jsonl) instance.restoreContext(jsonl)
+        else instance.seedHistory(messagesRef.current) // legacy conversations without context.jsonl
+      }
       agentsRef.current.set(key, instance)
     }
     return instance
   }, [agentHooks])
 
-  const openProject = useCallback(async (app: AppDescriptor) => {
+  const openGift = useCallback(async (gift: Gift) => {
     if (busy) return
-    const history = await projectStore.getConversation(app.id)
-    const next = history.length ? history : [initialMessage]
-    activeAppIdRef.current = app.id
-    setActiveAppId(app.id)
+    const history = await giftStore.getConversation(gift.id)
+    const next = history.length ? history : [welcomeChat(language)]
+    activeGiftIdRef.current = gift.id
+    setActiveGiftId(gift.id)
     messagesRef.current = next
     setMessages(next)
-    getAgent(app)
+    setInput(sessionRef.current.drafts[gift.id] ?? '')
+    await getAgent(gift)
     setActiveTab('chat')
-  }, [busy, getAgent])
+  }, [busy, getAgent, language])
 
-  const newProject = useCallback(() => {
+  const newGift = useCallback(() => {
     if (busy) return
-    agentsRef.current.delete(NEW_PROJECT_KEY)
-    activeAppIdRef.current = undefined
-    setActiveAppId(undefined)
-    messagesRef.current = [initialMessage]
-    setMessages([initialMessage])
+    agentsRef.current.delete(NEW_GIFT_KEY)
+    activeGiftIdRef.current = undefined
+    setActiveGiftId(undefined)
+    const welcome = [welcomeChat(language)]
+    messagesRef.current = welcome
+    setMessages(welcome)
+    setInput(sessionRef.current.drafts[''] ?? '')
     setActiveTab('chat')
-  }, [busy])
+  }, [busy, language])
 
   useEffect(() => {
     let active = true
     void (async () => {
-      const [initialApps, initialConfig] = await Promise.all([projectStore.listApps(), projectStore.getAgentConfig()])
-      if (active) {
-        setApps(initialApps)
-        setConfig(initialConfig)
+      const [initialGifts, initialConfig, session] = await Promise.all([
+        giftStore.listGifts(), giftStore.getAgentConfig(), giftStore.getSession(),
+      ])
+      if (!active) return
+      sessionRef.current = session
+      sessionReady.current = true
+      setGifts(initialGifts)
+      setConfig(initialConfig)
+      if (session.language) setLanguage(session.language)
+      if (session.activeTab) setActiveTab(session.activeTab)
+      const restored = session.activeGiftId ? initialGifts.find((gift) => gift.id === session.activeGiftId) : undefined
+      if (restored) {
+        const history = await giftStore.getConversation(restored.id)
+        if (!active) return
+        const next = history.length ? history : [welcomeChat(session.language ?? detectLanguage())]
+        activeGiftIdRef.current = restored.id
+        setActiveGiftId(restored.id)
+        messagesRef.current = next
+        setMessages(next)
+        await getAgent(restored)
       }
+      if (active) setInput(session.drafts[restored?.id ?? ''] ?? '')
     })()
     return () => { active = false }
-  }, [])
+  }, [getAgent])
+
+  useEffect(() => {
+    sessionRef.current.activeTab = activeTab
+    sessionRef.current.activeGiftId = activeGiftId
+    sessionRef.current.language = language
+    persistSession()
+  }, [activeTab, activeGiftId, language, persistSession])
+
+  useEffect(() => {
+    sessionRef.current.drafts[activeGiftId ?? ''] = input
+    const timeout = setTimeout(persistSession, 400)
+    return () => clearTimeout(timeout)
+  }, [input, activeGiftId, persistSession])
+
+  useEffect(() => {
+    if (!deleteCandidate) return
+    const timeout = setTimeout(() => setDeleteCandidate(undefined), 3000)
+    return () => clearTimeout(timeout)
+  }, [deleteCandidate])
 
   useEffect(() => {
     if (!notice) return
@@ -209,62 +237,8 @@ export default function App() {
   }, [messages, status])
 
   useEffect(() => {
-    if (activeAppId && versionsOpen) void projectStore.listSnapshots(activeAppId).then(setVersions)
-  }, [activeAppId, versionsOpen])
-
-  useEffect(() => {
-    let runtimeSource: string | undefined
-    const open = async (appId: string, title: string, environment: 'draft' | 'release') => {
-      const build = environment === 'draft' ? await projectStore.getDraftBuild(appId) : await projectStore.getReleaseBuild(appId)
-      runtimeSource ??= await fetch('/craft-runtime.js').then((response) => response.text())
-      setBrowserPreview({ appId, title, environment, build, runtimeSource })
-    }
-    const frame = () => iframeRef.current?.contentWindow as PreviewWindow | null
-    const document = () => iframeRef.current?.contentDocument
-    const handler: BrowserRuntimeHandler = {
-      open,
-      close: async () => setBrowserPreview(undefined),
-      inspect: async () => {
-        const doc = document()
-        if (!doc) throw new Error('No browser preview')
-        const tree = Array.from(doc.querySelectorAll<HTMLElement>('button,input,textarea,select,h1,h2,h3,[role],[data-testid]'))
-          .filter((element) => element.getClientRects().length > 0)
-          .slice(0, 100)
-          .map((element) => {
-            const label = element.getAttribute('aria-label') ?? element.textContent?.trim() ?? element.getAttribute('placeholder') ?? ''
-            return `${element.tagName.toLowerCase()} testId=${element.dataset.testid ?? ''} label=${label}`
-          }).join('\n')
-        return { tree, title: doc.title, url: frame()?.location.href ?? 'about:srcdoc' }
-      },
-      click: async (options) => {
-        const doc = document()
-        const element = options.testId
-          ? doc?.querySelector<HTMLElement>(`[data-testid="${CSS.escape(options.testId)}"]`)
-          : Array.from(doc?.querySelectorAll<HTMLElement>('button,[role="button"]') ?? [])
-            .find((item) => item.textContent?.includes(options.text ?? ''))
-        const coordinateTarget = options.x !== undefined && options.y !== undefined
-          ? doc?.elementFromPoint(options.x, options.y) as HTMLElement | null : undefined
-        const target = element ?? coordinateTarget
-        if (!target) throw new Error('Preview click target not found')
-        target.click()
-      },
-      input: async (options) => {
-        const doc = document()
-        const element = options.testId
-          ? doc?.querySelector<HTMLInputElement>(`[data-testid="${CSS.escape(options.testId)}"]`)
-          : Array.from(doc?.querySelectorAll<HTMLInputElement>('input,textarea') ?? [])
-            .find((item) => item.getAttribute('aria-label') === options.label || item.placeholder === options.label)
-        if (!element) throw new Error('Preview input target not found')
-        Object.getOwnPropertyDescriptor(Object.getPrototypeOf(element), 'value')?.set?.call(element, options.value)
-        const win = frame()
-        if (!win) throw new Error('Preview window not found')
-        element.dispatchEvent(new Event('input', { bubbles: true }))
-        element.dispatchEvent(new Event('change', { bubbles: true }))
-      },
-      logs: async () => frame()?.__craftLogs ?? [],
-    }
-    setBrowserRuntime(handler)
-  }, [])
+    if (activeGiftId && versionsOpen) void giftStore.listSnapshots(activeGiftId).then(setVersions)
+  }, [activeGiftId, versionsOpen])
 
   const send = async (event: FormEvent) => {
     event.preventDefault()
@@ -274,7 +248,8 @@ export default function App() {
     setBusy(true)
     addMessage('user', prompt)
     try {
-      await getAgent(activeApp).run(prompt)
+      const agent = await getAgent(activeGift)
+      await agent.run(prompt)
     } catch (error) {
       addMessage('assistant', error instanceof Error ? error.message : String(error))
     } finally {
@@ -286,19 +261,16 @@ export default function App() {
   const runOfflineCheck = async () => {
     setActiveTab('chat')
     setBusy(true)
-    setStatus('Building the offline Todo validation app')
+    setStatus(OFFLINE_STATUS)
     try {
-      const app = await createOfflineTodo()
-      await refreshApps()
-      const result: ChatMessage[] = [{
-        id: crypto.randomUUID(), role: 'assistant', createdAt: Date.now(),
-        text: '离线 Todo 已通过多文件 TSX 编译、UI 输入/点击、语义检查、快照和发布；Android 同时验证了真实截图。未调用模型。',
-      }]
-      activeAppIdRef.current = app.id
-      setActiveAppId(app.id)
+      const gift = await createOfflineTodo()
+      await refreshGifts()
+      const result: ChatMessage[] = [{ id: crypto.randomUUID(), role: 'assistant', createdAt: Date.now(), text: t('offline.result') }]
+      activeGiftIdRef.current = gift.id
+      setActiveGiftId(gift.id)
       messagesRef.current = result
       setMessages(result)
-      await projectStore.saveConversation(app.id, result)
+      await giftStore.saveConversation(gift.id, result)
     } catch (error) {
       addMessage('assistant', error instanceof Error ? error.message : String(error))
     } finally {
@@ -309,21 +281,21 @@ export default function App() {
 
   const saveSettings = async (event: FormEvent) => {
     event.preventDefault()
-    await projectStore.setAgentConfig(config)
+    await giftStore.setAgentConfig(config)
     setSettingsOpen(false)
-    setNotice('模型配置已保存')
+    setNotice(t('notice.configSaved'))
   }
 
   const rollback = async (snapshot: Snapshot) => {
-    if (!activeAppId) return
+    if (!activeGiftId) return
     setBusy(true)
     try {
-      await projectStore.rollback(activeAppId, snapshot.id)
-      setVersions(await projectStore.listSnapshots(activeAppId))
-      await refreshApps()
+      await giftStore.rollback(activeGiftId, snapshot.id)
+      setVersions(await giftStore.listSnapshots(activeGiftId))
+      await refreshGifts()
       setVersionsOpen(false)
       setActiveTab('chat')
-      addMessage('assistant', `已回滚到 ${snapshot.message}。`)
+      addMessage('assistant', t('rollback.message', { message: snapshot.message }))
     } catch (error) {
       addMessage('assistant', error instanceof Error ? error.message : String(error))
     } finally {
@@ -331,30 +303,55 @@ export default function App() {
     }
   }
 
-  const activeApp = apps.find((app) => app.id === activeAppId)
-  const isWelcome = !activeAppId && messages.length === 1 && messages[0].id === 'welcome' && !status
-  const filteredInspirations = discoverCategory === '全部'
-    ? inspirations : inspirations.filter((item) => item.category === discoverCategory)
+  const deleteGift = async (gift: Gift) => {
+    if (busy) return
+    if (deleteCandidate !== gift.id) {
+      setDeleteCandidate(gift.id)
+      return
+    }
+    setBusy(true)
+    try {
+      await runtime.closePreview()
+      await giftStore.deleteGift(gift.id)
+      agentsRef.current.delete(gift.id)
+      delete sessionRef.current.drafts[gift.id]
+      if (activeGiftIdRef.current === gift.id) {
+        activeGiftIdRef.current = undefined
+        setActiveGiftId(undefined)
+        const welcome = [welcomeChat(language)]
+        messagesRef.current = welcome
+        setMessages(welcome)
+      }
+      setDeleteCandidate(undefined)
+      await refreshGifts()
+      setNotice(t('notice.deleted', { name: gift.name }))
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : String(error))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const activeGift = gifts.find((gift) => gift.id === activeGiftId)
+  const isWelcome = !activeGiftId && messages.length === 1 && messages[0].id === 'welcome' && !status
+  const filteredInspirations = discoverCategory === 'all' ? inspirations : inspirations.filter((item) => item.category === discoverCategory)
   const subagentStatus = status.startsWith('Subagent: ')
   const baseStatus = subagentStatus ? status.slice('Subagent: '.length) : status
-  const statusText = (subagentStatus ? '子 agent · ' : '') + (baseStatus.startsWith('Agent round') ? '正在思考…' : ({
-    create_app: '正在创建项目…', list_files: '正在查看项目文件…',
-    read_file: '正在阅读代码…', write_file: '正在编写代码…', build_app: '正在编译并打开预览…',
-    inspect_preview: '正在检查界面结构…', screenshot_preview: '正在查看真实截图…',
-    click_preview: '正在测试界面交互…', input_preview: '正在测试输入…', preview_logs: '正在检查运行日志…',
-    delegate_task: '正在委派子任务…', publish_app: '正在准备发布…',
-    'Building the offline Todo validation app': '正在运行离线验证…',
-  } as Record<string, string>)[baseStatus] ?? baseStatus)
+  const statusText = (subagentStatus ? t('status.subagent') : '') + (
+    baseStatus.startsWith('Agent round') ? t('status.working')
+      : baseStatus === OFFLINE_STATUS ? t('status.offline')
+        : baseStatus === COMPACT_STATUS ? t('status.compacting')
+          : t(`status.${baseStatus}` as MessageKey) || baseStatus)
 
   const startPrompt = (prompt: string) => {
     if (busy) return
-    newProject()
+    newGift()
     setInput(prompt)
     requestAnimationFrame(() => composerRef.current?.focus())
   }
 
-  const continueApp = (app: AppDescriptor) => {
-    void openProject(app).then(() => setNotice(`已切换到 ${app.name}`))
+  const continueGift = (gift: Gift) => {
+    void openGift(gift).then(() => setNotice(t('notice.switched', { name: gift.name })))
   }
 
   return <div className="app-shell">
@@ -362,15 +359,15 @@ export default function App() {
       <section className={`conversation ${isWelcome ? 'welcome-conversation' : ''}`}>
         {isWelcome ? <div className="welcome">
           <CraftMark size="large" />
-          <h1>想做什么，直接告诉我。</h1>
-          <p>描述一个想法，Craft 会写代码、运行并测试。</p>
+          <h1>{t('welcome.title')}</h1>
+          <p>{t('welcome.subtitle')}</p>
           <div className="suggestion-list">
-            {chatSuggestions.map(({ title, subtitle, icon: Icon, prompt }) => <button className="suggestion" key={title} onClick={() => startPrompt(prompt)}>
-              <Icon size={19} /><span><strong>{title}</strong><small>{subtitle}</small></span><ChevronRight size={17} />
+            {chatSuggestions.map(({ key, icon: Icon, prompt }) => <button className="suggestion" key={key} onClick={() => startPrompt(t(prompt))}>
+              <Icon size={19} /><span><strong>{t(`${key}.title`)}</strong><small>{t(`${key}.subtitle`)}</small></span><ChevronRight size={17} />
             </button>)}
           </div>
           <button className="offline-link" disabled={busy} onClick={() => void runOfflineCheck()}>
-            <FlaskConical size={16} />先试试离线验证<ChevronRight size={15} />
+            <FlaskConical size={16} />{t('welcome.offline')}<ChevronRight size={15} />
           </button>
         </div> : <div className="message-list">
           {messages.map((message) => <article className={`message ${message.role}`} key={message.id}>
@@ -380,10 +377,10 @@ export default function App() {
           {status && <div className="working"><LoaderCircle className="spin" size={17} /><span>{statusText}</span></div>}
           {confirmation && <div className="confirmation">
             <span className="confirmation-icon"><Rocket size={20} /></span>
-            <div><strong>{confirmation.action}</strong><p>当前 Draft 已通过构建，将保存为新的正式版本。</p></div>
+            <div><strong>{confirmation.action}</strong><p>{t('confirm.body')}</p></div>
             <div className="confirmation-actions">
-              <button onClick={() => { confirmation.resolve(false); setConfirmation(undefined) }}>取消</button>
-              <button className="primary-button" onClick={() => { confirmation.resolve(true); setConfirmation(undefined) }}><Check size={16} />确认发布</button>
+              <button onClick={() => { confirmation.resolve(false); setConfirmation(undefined) }}>{t('confirm.cancel')}</button>
+              <button className="primary-button" onClick={() => { confirmation.resolve(true); setConfirmation(undefined) }}><Check size={16} />{t('confirm.ok')}</button>
             </div>
           </div>}
           <div ref={messagesEndRef} />
@@ -391,11 +388,11 @@ export default function App() {
       </section>
 
       <div className="composer-area">
-        {activeApp && <button className="project-context" onClick={() => setVersionsOpen(true)}>
-          <FolderGit2 size={15} /><span>{activeApp.name}</span><small>{activeApp.releaseSnapshotId ? '已发布' : '开发中'}</small><ChevronRight size={14} />
+        {activeGift && <button className="gift-context" onClick={() => setVersionsOpen(true)}>
+          <FolderGit2 size={15} /><span>{activeGift.name}</span><small>{activeGift.releaseSnapshotId ? t('gift.published') : t('gift.developing')}</small><ChevronRight size={14} />
         </button>}
         <form className="composer" onSubmit={send}>
-          <textarea ref={composerRef} aria-label="开发需求" value={input} rows={1}
+          <textarea ref={composerRef} aria-label={t('composer.send')} value={input} rows={1}
             onChange={(event) => setInput(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === 'Enter' && !event.shiftKey) {
@@ -403,10 +400,10 @@ export default function App() {
                 event.currentTarget.form?.requestSubmit()
               }
             }}
-            placeholder="描述你想做的应用…" />
+            placeholder={t('composer.placeholder')} />
           <div className="composer-footer">
-            <button className="composer-tool" type="button" aria-label="离线验证" disabled={busy} onClick={() => void runOfflineCheck()}><FlaskConical size={17} /><span>离线验证</span></button>
-            <button className="send-button" aria-label="发送需求" disabled={busy || !input.trim()} type="submit">
+            <button className="composer-tool" type="button" aria-label={t('profile.offline')} disabled={busy} onClick={() => void runOfflineCheck()}><FlaskConical size={17} /><span>{t('composer.offline')}</span></button>
+            <button className="send-button" aria-label={t('composer.send')} disabled={busy || !input.trim()} type="submit">
               {busy ? <LoaderCircle className="spin" size={19} /> : <ArrowUp size={20} />}
             </button>
           </div>
@@ -416,61 +413,69 @@ export default function App() {
 
     {!settingsOpen && activeTab === 'discover' && <main className="screen tab-screen discover-screen">
       <article className="featured-card">
-        <span className="eyebrow">本周精选 · 效率</span>
+        <span className="eyebrow">{t('featured.eyebrow')}</span>
         <div className="featured-icon"><Timer size={29} /></div>
-        <h2>专注计时器</h2>
-        <p>把大目标拆成每一个 25 分钟</p>
-        <button onClick={() => startPrompt(inspirations[0].prompt)}>用这个灵感创作<ArrowUp size={17} /></button>
+        <h2>{t('inspiration.focus.name')}</h2>
+        <p>{t('featured.subtitle')}</p>
+        <button onClick={() => startPrompt(t('inspiration.focus.prompt'))}>{t('featured.cta')}<ArrowUp size={17} /></button>
       </article>
-      <div className="category-tabs" aria-label="模板分类">
-        {['全部', '效率', '生活', '财务', '学习'].map((category) => <button key={category} className={discoverCategory === category ? 'active' : ''} onClick={() => setDiscoverCategory(category)}>{category}</button>)}
+      <div className="category-tabs" aria-label={t('nav.discover')}>
+        {categories.map((category) => <button key={category} className={discoverCategory === category ? 'active' : ''} onClick={() => setDiscoverCategory(category)}>{t(`category.${category}`)}</button>)}
       </div>
-      <section className="inspiration-grid" aria-label="应用灵感">
-        {filteredInspirations.map(({ name, description, icon: Icon, tone, prompt }) => <button className="inspiration-card" key={name} onClick={() => startPrompt(prompt)}>
+      <section className="inspiration-grid" aria-label={t('nav.discover')}>
+        {filteredInspirations.map(({ id, icon: Icon, tone }) => <button className="inspiration-card" key={id} onClick={() => startPrompt(t(`inspiration.${id}.prompt`))}>
           <span className={`template-icon ${tone}`}><Icon size={23} /></span>
-          <strong>{name}</strong><p>{description}</p><span className="use-template">使用模板<ArrowUp size={14} /></span>
+          <strong>{t(`inspiration.${id}.name`)}</strong><p>{t(`inspiration.${id}.description`)}</p><span className="use-template">{t('featured.cta')}<ArrowUp size={14} /></span>
         </button>)}
       </section>
     </main>}
 
-    {!settingsOpen && activeTab === 'apps' && <main className="screen tab-screen">
-      {apps.length === 0 ? <div className="empty-projects">
-        <span><Lightbulb size={29} /></span><h2>下一个应用，从一句话开始</h2><p>告诉 Craft 你的想法，它会完成代码、预览和测试。</p>
-        <button className="primary-button" onClick={() => startPrompt('')}>开始第一个项目<ArrowUp size={17} /></button>
+    {!settingsOpen && activeTab === 'gifts' && <main className="screen tab-screen">
+      {gifts.length === 0 ? <div className="empty-gifts">
+        <span><Lightbulb size={29} /></span><h2>{t('empty.title')}</h2><p>{t('empty.body')}</p>
+        <button className="primary-button" onClick={() => startPrompt('')}>{t('empty.cta')}<ArrowUp size={17} /></button>
       </div> : <>
-        <button className="primary-button new-project-button" disabled={busy} onClick={newProject}><Plus size={17} />新建项目</button>
-        <section className="project-list" aria-label="我的应用项目">
-        {apps.map((app, index) => <article className="project-row" key={app.id}>
-          <button className="project-open" disabled={!app.releaseSnapshotId} onClick={() => void runtime.openRelease(app.id, app.name)}>
-            <span className={`project-icon tone-${index % 4}`}><Blocks size={22} /></span>
-            <span className="project-info"><strong>{app.name}</strong><small><i className={app.releaseSnapshotId ? 'published' : ''} />{app.releaseSnapshotId ? '已发布' : '开发中'} · {new Intl.DateTimeFormat('zh-CN', { month: 'short', day: 'numeric' }).format(app.updatedAt)}</small></span>
-            {app.releaseSnapshotId ? <ChevronRight className="project-chevron" size={18} /> : null}
+        <button className="primary-button new-gift-button" disabled={busy} onClick={newGift}><Plus size={17} />{t('gifts.new')}</button>
+        <section className="gift-list" aria-label={t('gifts.aria')}>
+        {gifts.map((gift, index) => <article className="gift-row" key={gift.id}>
+          <button className="gift-open" disabled={!gift.releaseSnapshotId} onClick={() => void runtime.openRelease(gift.id, gift.name)}>
+            <span className={`gift-icon tone-${index % 4}`}><Blocks size={22} /></span>
+            <span className="gift-info"><strong>{gift.name}</strong><small><i className={gift.releaseSnapshotId ? 'published' : ''} />{gift.releaseSnapshotId ? t('gift.published') : t('gift.developing')} · {new Intl.DateTimeFormat(locale, { month: 'short', day: 'numeric' }).format(gift.updatedAt)}</small></span>
+            {gift.releaseSnapshotId ? <ChevronRight className="gift-chevron" size={18} /> : null}
           </button>
-          <button className="project-edit" aria-label={`继续开发 ${app.name}`} disabled={busy} onClick={() => continueApp(app)}><MessageSquare size={18} /></button>
+          <button className="gift-edit" aria-label={t('gift.continue', { name: gift.name })} disabled={busy} onClick={() => continueGift(gift)}><MessageSquare size={18} /></button>
+          <button className={`gift-delete ${deleteCandidate === gift.id ? 'confirming' : ''}`} aria-label={t('gift.delete', { name: gift.name })} disabled={busy} onClick={() => void deleteGift(gift)}>
+            {deleteCandidate === gift.id ? t('gift.deleteConfirm') : <Trash2 size={17} />}
+          </button>
         </article>)}
       </section></>}
     </main>}
 
     {!settingsOpen && activeTab === 'profile' && <main className="screen tab-screen profile-screen">
-      <section className="profile-card"><CraftMark size="large" /><div><h2>个人工作区</h2><p>{apps.length} 个项目 · {apps.filter((app) => app.releaseSnapshotId).length} 个已发布</p></div></section>
-      <p className="menu-label">工作区设置</p>
+      <section className="profile-card"><CraftMark size="large" /><div><h2>{t('profile.title')}</h2><p>{t('profile.summary', { total: gifts.length, published: gifts.filter((gift) => gift.releaseSnapshotId).length })}</p></div></section>
+      <p className="menu-label">{t('profile.settings')}</p>
       <section className="settings-list">
-        <button onClick={() => setSettingsOpen(true)}><span className="settings-icon"><Sparkles size={19} /></span><span><strong>模型设置</strong><small>{config.model || '配置你的 AI 模型'}</small></span><ChevronRight size={18} /></button>
-        <button disabled={busy} onClick={() => void runOfflineCheck()}><span className="settings-icon"><FlaskConical size={19} /></span><span><strong>离线验证</strong><small>不调用模型，测试完整构建链路</small></span><ChevronRight size={18} /></button>
+        <button onClick={() => setSettingsOpen(true)}><span className="settings-icon"><Sparkles size={19} /></span><span><strong>{t('profile.model')}</strong><small>{config.model || t('profile.modelHint')}</small></span><ChevronRight size={18} /></button>
+        <button disabled={busy} onClick={() => void runOfflineCheck()}><span className="settings-icon"><FlaskConical size={19} /></span><span><strong>{t('profile.offline')}</strong><small>{t('profile.offlineHint')}</small></span><ChevronRight size={18} /></button>
+        <div className="language-row"><span className="settings-icon"><Languages size={19} /></span><span><strong>{t('profile.language')}</strong></span>
+          <div className="effort-options language-options" role="group" aria-label={t('profile.language')}>
+            {(['zh', 'en'] as const).map((option) => <button key={option} type="button" className={language === option ? 'active' : ''} aria-pressed={language === option} onClick={() => setLanguage(option)}>{option === 'zh' ? '中文' : 'English'}</button>)}
+          </div>
+        </div>
       </section>
-      <p className="menu-label">关于</p>
+      <p className="menu-label">{t('profile.about')}</p>
       <section className="settings-list static-list">
-        <div><span className="settings-icon"><ShieldCheck size={19} /></span><span><strong>数据保存在本机</strong><small>项目、版本与密钥不离开设备</small></span></div>
-        <div><span className="settings-icon"><Blocks size={19} /></span><span><strong>Craft</strong><small>验证版 0.1.0</small></span></div>
+        <div><span className="settings-icon"><ShieldCheck size={19} /></span><span><strong>{t('profile.dataLocal')}</strong><small>{t('profile.dataLocalHint')}</small></span></div>
+        <div><span className="settings-icon"><Blocks size={19} /></span><span><strong>Craft</strong><small>{t('profile.version')}</small></span></div>
       </section>
     </main>}
 
-    {!settingsOpen && <nav className="bottom-nav" aria-label="主导航">
+    {!settingsOpen && <nav className="bottom-nav" aria-label={t('nav.chat')}>
       {([
-        { id: 'chat', label: '对话', icon: MessageCircle },
-        { id: 'discover', label: '广场', icon: Compass },
-        { id: 'apps', label: '应用', icon: LayoutGrid },
-        { id: 'profile', label: '我的', icon: CircleUserRound },
+        { id: 'chat', label: t('nav.chat'), icon: MessageCircle },
+        { id: 'discover', label: t('nav.discover'), icon: Compass },
+        { id: 'gifts', label: t('nav.gifts'), icon: LayoutGrid },
+        { id: 'profile', label: t('nav.profile'), icon: CircleUserRound },
       ] as { id: Tab; label: string; icon: LucideIcon }[]).map(({ id, label, icon: Icon }) => <button key={id} className={activeTab === id ? 'active' : ''} aria-current={activeTab === id ? 'page' : undefined} onClick={() => setActiveTab(id)}>
         <span><Icon size={22} strokeWidth={activeTab === id ? 2.3 : 1.8} /></span><small>{label}</small>
       </button>)}
@@ -478,56 +483,50 @@ export default function App() {
 
     {settingsOpen && <main className="screen settings-page">
       <header className="page-header">
-        <button className="page-back" aria-label="返回我的" onClick={() => setSettingsOpen(false)}><ArrowLeft size={22} /></button>
-        <h1>模型设置</h1>
+        <button className="page-back" aria-label={t('settings.back')} onClick={() => setSettingsOpen(false)}><ArrowLeft size={22} /></button>
+        <h1>{t('settings.title')}</h1>
         <span className="page-header-spacer" />
       </header>
       <div className="settings-page-content">
         <form className="settings-form" onSubmit={(event) => void saveSettings(event)}>
-          <section className="settings-group" aria-label="模型服务">
-            <p className="settings-group-title">模型服务</p>
+          <section className="settings-group" aria-label={t('settings.service')}>
+            <p className="settings-group-title">{t('settings.service')}</p>
             <div className="settings-fields">
               <label>API Key<div className="field"><input type="password" autoComplete="off" placeholder="sk-…" value={config.apiKey} onChange={(event) => setConfig({ ...config, apiKey: event.target.value })} /></div></label>
-              <label>接口地址<div className="field"><input inputMode="url" placeholder="https://…/v1/chat/completions" value={config.baseUrl} onChange={(event) => setConfig({ ...config, baseUrl: event.target.value })} /></div></label>
-              <label>模型名称<div className="field"><input placeholder="例如 gpt-4.1-mini" value={config.model} onChange={(event) => setConfig({ ...config, model: event.target.value })} /></div></label>
+              <label>{t('settings.baseUrl')}<div className="field"><input inputMode="url" placeholder="https://…/v1/chat/completions" value={config.baseUrl} onChange={(event) => setConfig({ ...config, baseUrl: event.target.value })} /></div></label>
+              <label>{t('settings.model')}<div className="field"><input placeholder={t('settings.modelPlaceholder')} value={config.model} onChange={(event) => setConfig({ ...config, model: event.target.value })} /></div></label>
             </div>
           </section>
-          <section className="settings-group" aria-label="生成偏好">
-            <p className="settings-group-title">生成偏好</p>
+          <section className="settings-group" aria-label={t('settings.generation')}>
+            <p className="settings-group-title">{t('settings.generation')}</p>
             <div className="reasoning-setting">
-              <div><strong>思考强度</strong><small>更高强度通常更慢，也会消耗更多 Token</small></div>
-              <div className="effort-options" role="group" aria-label="思考强度">
-                {([
-                  { value: 'none', label: '关闭' },
-                  { value: 'low', label: '低' },
-                  { value: 'medium', label: '中' },
-                  { value: 'high', label: '高' },
-                ] as const).map((option) => <button key={option.value} type="button" className={config.reasoningEffort === option.value ? 'active' : ''} aria-pressed={config.reasoningEffort === option.value} onClick={() => setConfig({ ...config, reasoningEffort: option.value })}>{option.label}</button>)}
+              <div><strong>{t('settings.effort')}</strong><small>{t('settings.effortHint')}</small></div>
+              <div className="effort-options" role="group" aria-label={t('settings.effort')}>
+                {(['none', 'low', 'high', 'max'] as const).map((option) => <button key={option} type="button" className={config.reasoningEffort === option ? 'active' : ''} aria-pressed={config.reasoningEffort === option} onClick={() => setConfig({ ...config, reasoningEffort: option })}>{t(`effort.${option}`)}</button>)}
               </div>
-              <p className="settings-help">随 reasoning_effort 发送；实际效果取决于模型支持。</p>
+              <p className="settings-help">{t('settings.effortHelp')}</p>
             </div>
           </section>
-          <p className="security-note"><ShieldCheck size={15} />API Key 将加密保存在本机</p>
-          <button className="save-button" type="submit">保存配置<Check size={18} /></button>
+          <p className="security-note"><ShieldCheck size={15} />{t('settings.keyNote')}</p>
+          <button className="save-button" type="submit">{t('settings.save')}<Check size={18} /></button>
         </form>
       </div>
     </main>}
 
-    {versionsOpen && activeApp && <div className="sheet-backdrop" onClick={(event) => { if (event.target === event.currentTarget) setVersionsOpen(false) }}>
-      <section className="bottom-sheet versions-sheet" role="dialog" aria-modal="true" aria-label="版本记录">
+    {versionsOpen && activeGift && <div className="sheet-backdrop" onClick={(event) => { if (event.target === event.currentTarget) setVersionsOpen(false) }}>
+      <section className="bottom-sheet versions-sheet" role="dialog" aria-modal="true" aria-label={t('versions.title')}>
         <div className="sheet-handle" />
-        <header><div><h2>版本记录</h2><p>{activeApp.name}</p></div><button className="round-icon" aria-label="关闭版本记录" onClick={() => setVersionsOpen(false)}><X size={19} /></button></header>
+        <header><div><h2>{t('versions.title')}</h2><p>{activeGift.name}</p></div><button className="round-icon" aria-label={t('versions.close')} onClick={() => setVersionsOpen(false)}><X size={19} /></button></header>
         <div className="version-list">
-          {versions.length === 0 ? <div className="empty-versions"><Clock3 size={25} /><p>还没有快照</p></div> : versions.map((snapshot, index) => <div className="version-row" key={snapshot.id}>
+          {versions.length === 0 ? <div className="empty-versions"><Clock3 size={25} /><p>{t('versions.empty')}</p></div> : versions.map((snapshot, index) => <div className="version-row" key={snapshot.id}>
             <span className="version-node">{index === 0 ? <Check size={15} /> : null}</span>
-            <div><strong>{snapshot.message}</strong><small>{new Date(snapshot.createdAt).toLocaleString()}</small></div>
-            <button disabled={busy || !snapshot.buildId} onClick={() => void rollback(snapshot)}>回滚</button>
+            <div><strong>{snapshot.message}</strong><small>{new Date(snapshot.createdAt).toLocaleString(locale)}</small></div>
+            <button disabled={busy || !snapshot.buildId} onClick={() => void rollback(snapshot)}>{t('versions.rollback')}</button>
           </div>)}
         </div>
       </section>
     </div>}
 
     {notice && <div className="toast"><Check size={16} />{notice}</div>}
-    {browserPreview && <BrowserPreview preview={browserPreview} iframeRef={iframeRef} onClose={() => setBrowserPreview(undefined)} />}
   </div>
 }

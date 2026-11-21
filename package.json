@@ -2,7 +2,7 @@
   "name": "craft",
   "private": true,
   "version": "0.1.0",
-  "description": "On-device Android app workshop with a self-developed coding agent",
+  "description": "Craft: an on-device Android host that grows its own Gifts (feature modules) with a self-developed coding agent",
   "type": "module",
   "scripts": {
     "dev": "npm run runtime:build && vite",

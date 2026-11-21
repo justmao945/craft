@@ -225,16 +225,16 @@ public class CraftRuntimePlugin extends Plugin {
     }
 
     private void openPreview(PluginCall call, String environment) {
-        String appId = call.getString("appId");
-        if (appId == null || appId.isEmpty()) {
-            call.reject("appId is required");
+        String giftId = call.getString("giftId");
+        if (giftId == null || giftId.isEmpty()) {
+            call.reject("giftId is required");
             return;
         }
         // Fail early with a clear message when the requested build does not exist.
         CraftStore store = new CraftStore(getContext());
         try {
-            store.requireApp(appId);
-            store.getBuildFor(appId, environment);
+            store.requireGift(giftId);
+            store.getBuildFor(giftId, environment);
         } catch (Exception e) {
             call.reject(e.getMessage(), e);
             return;
@@ -244,7 +244,7 @@ public class CraftRuntimePlugin extends Plugin {
             title = "Craft Preview";
         }
         Intent intent = new Intent(getContext(), PreviewActivity.class);
-        intent.putExtra(PreviewActivity.EXTRA_APP_ID, appId);
+        intent.putExtra(PreviewActivity.EXTRA_GIFT_ID, giftId);
         intent.putExtra(PreviewActivity.EXTRA_ENVIRONMENT, environment);
         intent.putExtra(PreviewActivity.EXTRA_TITLE, title.trim());
 

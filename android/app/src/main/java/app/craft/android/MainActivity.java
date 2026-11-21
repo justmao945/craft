@@ -14,7 +14,7 @@ public class MainActivity extends BridgeActivity {
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
-        registerPlugin(CraftProjectPlugin.class);
+        registerPlugin(CraftGiftPlugin.class);
         registerPlugin(CraftRuntimePlugin.class);
         super.onCreate(savedInstanceState);
         View webView = getBridge().getWebView();

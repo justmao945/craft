@@ -2,6 +2,12 @@ package app.craft.android;
 
 import android.content.Context;
 
+import org.eclipse.jgit.api.Git;
+import org.eclipse.jgit.api.errors.GitAPIException;
+import org.eclipse.jgit.api.errors.NoHeadException;
+import org.eclipse.jgit.lib.PersonIdent;
+import org.eclipse.jgit.revwalk.RevCommit;
+
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -21,47 +27,54 @@ import java.util.Locale;
 import java.util.UUID;
 
 /**
- * File-backed storage for Craft apps, all under the app-private files dir:
+ * File-backed storage for Craft gifts, all under the app-private files dir:
  *
- *   <filesDir>/craft/apps.json                        app registry
- *   <filesDir>/craft/<appId>/workspace/**             live workspace source files
- *   <filesDir>/craft/<appId>/snapshots/<id>/files/**  immutable source snapshots
- *   <filesDir>/craft/<appId>/snapshots/<id>/meta.json { id, message, createdAt, buildId? }
- *   <filesDir>/craft/<appId>/builds/<id>/{app.js,app.css}  immutable builds
- *   <filesDir>/craft/<appId>/draft.json               { buildId }
- *   <filesDir>/craft/<appId>/release.json             { buildId }
- *   <filesDir>/craft/<appId>/conversation.json        single project-scoped chat history
+ *   <filesDir>/craft/gifts.json                       gift registry
+ *   <filesDir>/craft/<giftId>/workspace/**             live workspace source files (git repo)
+ *   <filesDir>/craft/<giftId>/snapshots/<id>/meta.json { id, message, createdAt, buildId? }
+ *   <filesDir>/craft/<giftId>/builds/<id>/{app.js,app.css}  immutable builds
+ *   <filesDir>/craft/<giftId>/draft.json               { buildId }
+ *   <filesDir>/craft/<giftId>/release.json             { buildId }
+ *   <filesDir>/craft/<giftId>/conversation.json        single project-scoped chat history
+ *   <filesDir>/craft/<giftId>/context.jsonl            full model transcript (JSONL, lossless)
+ *   <filesDir>/craft/<giftId>/context-archive-<ts>.jsonl  pre-compaction raw transcripts
+ *   <filesDir>/craft/session.json                     UI session: last project/tab, composer drafts
  *   <filesDir>/craft/agent-config.json                { apiKey(encrypted), baseUrl, model, reasoningEffort }
  */
 public class CraftStore {
 
     public static final String DEFAULT_AGENT_BASE_URL = "https://api.deepseek.com/chat/completions";
-    public static final String DEFAULT_AGENT_MODEL = "deepseek-chat";
+    public static final String DEFAULT_AGENT_MODEL = "deepseek-flash";
 
-    private static final String REGISTRY_FILE = "apps.json";
+    private static final String REGISTRY_FILE = "gifts.json";
     private static final String WORKSPACE_DIR = "workspace";
+    /** Git internals inside the workspace; never exposed through file traversal. */
+    private static final String GIT_DIR = ".git";
     private static final String SNAPSHOTS_DIR = "snapshots";
     private static final String BUILDS_DIR = "builds";
     private static final String DRAFT_POINTER = "draft.json";
     private static final String RELEASE_POINTER = "release.json";
     private static final String AGENT_CONFIG_FILE = "agent-config.json";
     private static final String CONVERSATION_FILE = "conversation.json";
+    private static final String CONTEXT_FILE = "context.jsonl";
+    private static final String SESSION_FILE = "session.json";
+    private static final String ARCHIVE_FILE_PATTERN = "context-archive-\\d+\\.jsonl";
     private static final String META_FILE = "meta.json";
     private static final String BUILD_JS = "app.js";
     private static final String BUILD_CSS = "app.css";
 
-    /** App ids are generated slugs; anything else is rejected. */
-    private static final String APP_ID_PATTERN = "[a-z0-9]+(-[a-z0-9]+)*";
-    /** File/dir segments we ever store under an app dir (uuids, generated file names). */
+    /** Gift ids are generated slugs; anything else is rejected. */
+    private static final String GIFT_ID_PATTERN = "[a-z0-9]+(-[a-z0-9]+)*";
+    /** File/dir segments we ever store under a gift dir (uuids, generated file names). */
     private static final String SAFE_SEGMENT_PATTERN = "[A-Za-z0-9][A-Za-z0-9._-]*";
 
-    public static class AppInfo {
+    public static class GiftInfo {
         public final String id;
         public final String name;
         public final String releaseSnapshotId; // nullable
         public final long updatedAt;
 
-        AppInfo(String id, String name, String releaseSnapshotId, long updatedAt) {
+        GiftInfo(String id, String name, String releaseSnapshotId, long updatedAt) {
             this.id = id;
             this.name = name;
             this.releaseSnapshotId = releaseSnapshotId;
@@ -96,11 +109,11 @@ public class CraftStore {
     }
 
     public static class RollbackResult {
-        public final AppInfo app;
+        public final GiftInfo gift;
         public final SnapshotInfo snapshot;
 
-        RollbackResult(AppInfo app, SnapshotInfo snapshot) {
-            this.app = app;
+        RollbackResult(GiftInfo gift, SnapshotInfo snapshot) {
+            this.gift = gift;
             this.snapshot = snapshot;
         }
     }
@@ -115,85 +128,91 @@ public class CraftStore {
         }
     }
 
-    // ---------------------------------------------------------------- apps
+    // ------------------------------------------------------------------ gifts
 
-    public synchronized List<AppInfo> listApps() throws IOException {
-        JSONArray apps = readRegistry().optJSONArray("apps");
-        List<AppInfo> out = new ArrayList<>();
-        if (apps != null) {
-            for (int i = 0; i < apps.length(); i++) {
-                JSONObject entry = apps.optJSONObject(i);
+    public synchronized List<GiftInfo> listGifts() throws IOException {
+        JSONArray gifts = readRegistry().optJSONArray("gifts");
+        List<GiftInfo> out = new ArrayList<>();
+        if (gifts != null) {
+            for (int i = 0; i < gifts.length(); i++) {
+                JSONObject entry = gifts.optJSONObject(i);
                 if (entry != null) {
-                    out.add(appFromEntry(entry));
+                    out.add(giftFromEntry(entry));
                 }
             }
         }
         return out;
     }
 
-    /** Returns the registered app, or throws with a clear message. */
-    public synchronized AppInfo requireApp(String appId) throws IOException {
-        if (appId == null || !appId.matches(APP_ID_PATTERN)) {
-            throw new IllegalArgumentException("Invalid app id: " + (appId == null ? "(null)" : appId));
+    /** Returns the registered gift, or throws with a clear message. */
+    public synchronized GiftInfo requireGift(String giftId) throws IOException {
+        if (giftId == null || !giftId.matches(GIFT_ID_PATTERN)) {
+            throw new IllegalArgumentException("Invalid gift id: " + (giftId == null ? "(null)" : giftId));
         }
-        JSONArray apps = readRegistry().optJSONArray("apps");
-        if (apps != null) {
-            for (int i = 0; i < apps.length(); i++) {
-                JSONObject entry = apps.optJSONObject(i);
-                if (entry != null && appId.equals(entry.optString("id"))) {
-                    return appFromEntry(entry);
+        JSONArray gifts = readRegistry().optJSONArray("gifts");
+        if (gifts != null) {
+            for (int i = 0; i < gifts.length(); i++) {
+                JSONObject entry = gifts.optJSONObject(i);
+                if (entry != null && giftId.equals(entry.optString("id"))) {
+                    return giftFromEntry(entry);
                 }
             }
         }
-        throw new IllegalArgumentException("Unknown app: " + appId);
+        throw new IllegalArgumentException("Unknown gift: " + giftId);
     }
 
-    public synchronized AppInfo createApp(String name) throws IOException {
+    public synchronized GiftInfo createGift(String name) throws IOException {
         if (name == null || name.trim().isEmpty()) {
-            throw new IllegalArgumentException("App name is required");
+            throw new IllegalArgumentException("Gift name is required");
         }
         String trimmed = name.trim();
         JSONObject registry = readRegistry();
-        JSONArray apps = registry.optJSONArray("apps");
-        if (apps == null) {
-            apps = new JSONArray();
+        JSONArray gifts = registry.optJSONArray("gifts");
+        if (gifts == null) {
+            gifts = new JSONArray();
         }
         String slug = slugify(trimmed);
-        String appId;
+        String giftId;
         do {
-            appId = slug + "-" + UUID.randomUUID().toString().substring(0, 8);
-        } while (containsApp(apps, appId));
+            giftId = slug + "-" + UUID.randomUUID().toString().substring(0, 8);
+        } while (containsGift(gifts, giftId));
 
         JSONObject entry = new JSONObject();
         try {
-            entry.put("id", appId);
+            entry.put("id", giftId);
             entry.put("name", trimmed);
             entry.put("updatedAt", System.currentTimeMillis());
-            apps.put(entry);
-            registry.put("apps", apps);
+            gifts.put(entry);
+            registry.put("gifts", gifts);
         } catch (JSONException e) {
-            throw new IOException("Could not build app registry entry", e);
+            throw new IOException("Could not build gift registry entry", e);
         }
         atomicWriteString(registryFile(), registry.toString());
 
-        File appDir = appDir(appId);
+        File giftDir = giftDir(giftId);
+        File workspace = new File(giftDir, WORKSPACE_DIR);
         //noinspection ResultOfMethodCallIgnored
-        new File(appDir, WORKSPACE_DIR).mkdirs();
+        workspace.mkdirs();
+        try (Git git = Git.init().setDirectory(workspace).call()) {
+            // repository initialized; the first commit happens on the first snapshot
+        } catch (GitAPIException e) {
+            throw new IOException("Could not initialize gift workspace repository", e);
+        }
         //noinspection ResultOfMethodCallIgnored
-        new File(appDir, SNAPSHOTS_DIR).mkdirs();
+        new File(giftDir, SNAPSHOTS_DIR).mkdirs();
         //noinspection ResultOfMethodCallIgnored
-        new File(appDir, BUILDS_DIR).mkdirs();
-        return appFromEntry(entry);
+        new File(giftDir, BUILDS_DIR).mkdirs();
+        return giftFromEntry(entry);
     }
 
     /** Sets releaseSnapshotId (or clears it when null) and refreshes updatedAt. */
-    private synchronized AppInfo updateAppRelease(String appId, String snapshotId) throws IOException {
+    private synchronized GiftInfo updateGiftRelease(String giftId, String snapshotId) throws IOException {
         JSONObject registry = readRegistry();
-        JSONArray apps = registry.optJSONArray("apps");
-        if (apps != null) {
-            for (int i = 0; i < apps.length(); i++) {
-                JSONObject entry = apps.optJSONObject(i);
-                if (entry != null && appId.equals(entry.optString("id"))) {
+        JSONArray gifts = registry.optJSONArray("gifts");
+        if (gifts != null) {
+            for (int i = 0; i < gifts.length(); i++) {
+                JSONObject entry = gifts.optJSONObject(i);
+                if (entry != null && giftId.equals(entry.optString("id"))) {
                     try {
                         if (snapshotId != null) {
                             entry.put("releaseSnapshotId", snapshotId);
@@ -202,27 +221,27 @@ public class CraftStore {
                         }
                         entry.put("updatedAt", System.currentTimeMillis());
                     } catch (JSONException e) {
-                        throw new IOException("Could not update app entry", e);
+                        throw new IOException("Could not update gift entry", e);
                     }
                     atomicWriteString(registryFile(), registry.toString());
-                    return appFromEntry(entry);
+                    return giftFromEntry(entry);
                 }
             }
         }
-        throw new IllegalArgumentException("Unknown app: " + appId);
+        throw new IllegalArgumentException("Unknown gift: " + giftId);
     }
 
-    private static AppInfo appFromEntry(JSONObject entry) {
+    private static GiftInfo giftFromEntry(JSONObject entry) {
         String releaseSnapshotId = entry.has("releaseSnapshotId") && !entry.isNull("releaseSnapshotId")
                 ? entry.optString("releaseSnapshotId")
                 : null;
-        return new AppInfo(entry.optString("id"), entry.optString("name"), releaseSnapshotId, entry.optLong("updatedAt"));
+        return new GiftInfo(entry.optString("id"), entry.optString("name"), releaseSnapshotId, entry.optLong("updatedAt"));
     }
 
-    private static boolean containsApp(JSONArray apps, String appId) {
-        for (int i = 0; i < apps.length(); i++) {
-            JSONObject entry = apps.optJSONObject(i);
-            if (entry != null && appId.equals(entry.optString("id"))) {
+    private static boolean containsGift(JSONArray gifts, String giftId) {
+        for (int i = 0; i < gifts.length(); i++) {
+            JSONObject entry = gifts.optJSONObject(i);
+            if (entry != null && giftId.equals(entry.optString("id"))) {
                 return true;
             }
         }
@@ -248,7 +267,7 @@ public class CraftStore {
         try {
             return new JSONObject(readString(file));
         } catch (JSONException e) {
-            throw new IOException("Corrupted app registry: " + REGISTRY_FILE, e);
+            throw new IOException("Corrupted gift registry: " + REGISTRY_FILE, e);
         }
     }
 
@@ -259,28 +278,28 @@ public class CraftStore {
     // ------------------------------------------------------------ workspace
 
     /** All workspace files as {relativePath -> content}. Includes app.json if present. */
-    public JSONObject workspaceFiles(String appId) throws IOException, JSONException {
-        requireApp(appId);
+    public JSONObject workspaceFiles(String giftId) throws IOException, JSONException {
+        requireGift(giftId);
         JSONObject files = new JSONObject();
-        File workspace = workspaceDir(appId);
+        File workspace = workspaceDir(giftId);
         collectFiles(workspace, "", files);
         return files;
     }
 
     /** Sorted relative workspace paths. */
-    public List<String> listWorkspaceFiles(String appId) throws IOException {
-        requireApp(appId);
+    public List<String> listWorkspaceFiles(String giftId) throws IOException {
+        requireGift(giftId);
         List<String> out = new ArrayList<>();
-        File workspace = workspaceDir(appId);
+        File workspace = workspaceDir(giftId);
         collectPaths(workspace, "", out);
         String[] arr = out.toArray(new String[0]);
         Arrays.sort(arr);
         return Arrays.asList(arr);
     }
 
-    public String readFile(String appId, String path) throws IOException {
-        requireApp(appId);
-        File file = resolveWorkspaceFile(appId, path);
+    public String readFile(String giftId, String path) throws IOException {
+        requireGift(giftId);
+        File file = resolveWorkspaceFile(giftId, path);
         if (!file.isFile()) {
             throw new IOException("File not found: " + path);
         }
@@ -288,39 +307,133 @@ public class CraftStore {
     }
 
     /** Atomic write (temp file + rename) of a single workspace file. Path traversal is rejected. */
-    public void writeFile(String appId, String path, String content) throws IOException {
-        requireApp(appId);
-        File file = resolveWorkspaceFile(appId, path);
+    public void writeFile(String giftId, String path, String content) throws IOException {
+        requireGift(giftId);
+        File file = resolveWorkspaceFile(giftId, path);
         atomicWriteString(file, content == null ? "" : content);
     }
 
-    private File workspaceDir(String appId) {
-        return new File(appDir(appId), WORKSPACE_DIR);
+    private File workspaceDir(String giftId) {
+        return new File(giftDir(giftId), WORKSPACE_DIR);
+    }
+
+    /** Opens the git repository embedded in the gift's workspace, initializing it on first use. */
+    private Git openWorkspaceGit(String giftId) throws IOException {
+        File workspace = workspaceDir(giftId);
+        try {
+            if (!new File(workspace, GIT_DIR).isDirectory()) {
+                // legacy gift created before git versioning: upgrade in place
+                return Git.init().setDirectory(workspace).call();
+            }
+            return Git.open(workspace);
+        } catch (GitAPIException | IOException e) {
+            throw new IOException("Could not open gift workspace repository: " + giftId, e);
+        }
     }
 
     // ---------------------------------------------------------- conversation
 
-    /** One conversation per app; stored outside the workspace so it never ships with app source. */
-    public synchronized String readConversation(String appId) throws IOException {
-        requireApp(appId);
-        File file = new File(appDir(appId), CONVERSATION_FILE);
+    /** One conversation per gift; stored outside the workspace so it never ships with gift source. */
+    public synchronized String readConversation(String giftId) throws IOException {
+        requireGift(giftId);
+        File file = new File(giftDir(giftId), CONVERSATION_FILE);
         if (!file.isFile()) {
             return "[]";
         }
         return readString(file);
     }
 
-    public synchronized void writeConversation(String appId, String json) throws IOException, JSONException {
-        requireApp(appId);
+    public synchronized void writeConversation(String giftId, String json) throws IOException, JSONException {
+        requireGift(giftId);
         new JSONArray(json); // reject malformed payloads before they corrupt the saved history
-        atomicWriteString(new File(appDir(appId), CONVERSATION_FILE), json);
+        atomicWriteString(new File(giftDir(giftId), CONVERSATION_FILE), json);
     }
 
-    private File appDir(String appId) {
-        return new File(rootDir, appId);
+    /** Lossless model transcript; unlike conversation.json this keeps tool calls and reasoning. */
+    public synchronized String readModelContext(String giftId) throws IOException {
+        requireGift(giftId);
+        File file = new File(giftDir(giftId), CONTEXT_FILE);
+        return file.isFile() ? readString(file) : "";
     }
 
-    private File resolveWorkspaceFile(String appId, String relPath) throws IOException {
+    public synchronized void writeModelContext(String giftId, String jsonl) throws IOException {
+        requireGift(giftId);
+        atomicWriteString(new File(giftDir(giftId), CONTEXT_FILE), jsonl == null ? "" : jsonl);
+    }
+
+    /** Each compaction archives the dropped raw messages as a NEW timestamped file. */
+    public synchronized String archiveModelContext(String giftId, String jsonl) throws IOException {
+        requireGift(giftId);
+        File file = new File(giftDir(giftId), "context-archive-" + System.currentTimeMillis() + ".jsonl");
+        atomicWriteString(file, jsonl == null ? "" : jsonl);
+        return file.getName();
+    }
+
+    public synchronized List<String> listContextArchives(String giftId) throws IOException {
+        requireGift(giftId);
+        List<String> out = new ArrayList<>();
+        File[] kids = giftDir(giftId).listFiles();
+        if (kids != null) {
+            for (File kid : kids) {
+                if (kid.isFile() && kid.getName().matches(ARCHIVE_FILE_PATTERN)) {
+                    out.add(kid.getName());
+                }
+            }
+        }
+        out.sort(Comparator.naturalOrder());
+        return out;
+    }
+
+    public synchronized String readContextArchive(String giftId, String name) throws IOException {
+        requireGift(giftId);
+        if (name == null || !name.matches(ARCHIVE_FILE_PATTERN)) {
+            throw new IllegalArgumentException("Invalid archive file name");
+        }
+        File file = new File(giftDir(giftId), name);
+        if (!file.isFile()) {
+            throw new IOException("Archive not found: " + name);
+        }
+        return readString(file);
+    }
+
+    /** Removes the registry entry and every artifact of the project. */
+    public synchronized void deleteGift(String giftId) throws IOException {
+        requireGift(giftId);
+        JSONObject registry = readRegistry();
+        JSONArray gifts = registry.optJSONArray("gifts");
+        JSONArray kept = new JSONArray();
+        if (gifts != null) {
+            for (int i = 0; i < gifts.length(); i++) {
+                JSONObject entry = gifts.optJSONObject(i);
+                if (entry != null && !giftId.equals(entry.optString("id"))) {
+                    kept.put(entry);
+                }
+            }
+        }
+        try {
+            registry.put("gifts", kept);
+        } catch (JSONException e) {
+            throw new IOException("Could not update gift registry", e);
+        }
+        atomicWriteString(registryFile(), registry.toString());
+        deleteRecursively(giftDir(giftId));
+    }
+
+    public synchronized String readSession() throws IOException {
+        File file = new File(rootDir, SESSION_FILE);
+        return file.isFile() ? readString(file) : "";
+    }
+
+    public synchronized void writeSession(String json) throws IOException, JSONException {
+        new JSONObject(json);
+        atomicWriteString(new File(rootDir, SESSION_FILE), json);
+    }
+
+    private File giftDir(String giftId) {
+        return new File(rootDir, giftId);
+    }
+
+    private File resolveWorkspaceFile(String giftId, String relPath) throws IOException {
         if (relPath == null || relPath.trim().isEmpty()) {
             throw new IllegalArgumentException("Path must not be empty");
         }
@@ -330,12 +443,12 @@ public class CraftStore {
         if (relPath.startsWith("/") || relPath.indexOf('\\') >= 0) {
             throw new IllegalArgumentException("Invalid path: " + relPath);
         }
-        File workspace = workspaceDir(appId);
+        File workspace = workspaceDir(giftId);
         File target = new File(workspace, relPath);
         String canonical = target.getCanonicalPath();
         String base = workspace.getCanonicalPath() + File.separator;
         if (!canonical.equals(workspace.getCanonicalPath()) && !canonical.startsWith(base)) {
-            throw new IllegalArgumentException("Path escapes the app workspace: " + relPath);
+            throw new IllegalArgumentException("Path escapes the gift workspace: " + relPath);
         }
         return target;
     }
@@ -347,6 +460,9 @@ public class CraftStore {
         }
         Arrays.sort(kids, BY_NAME);
         for (File kid : kids) {
+            if (GIT_DIR.equals(kid.getName())) {
+                continue; // never expose git internals to agent tooling
+            }
             String rel = prefix.isEmpty() ? kid.getName() : prefix + "/" + kid.getName();
             if (kid.isDirectory()) {
                 collectFiles(kid, rel, files);
@@ -363,6 +479,9 @@ public class CraftStore {
         }
         Arrays.sort(kids, BY_NAME);
         for (File kid : kids) {
+            if (GIT_DIR.equals(kid.getName())) {
+                continue; // never expose git internals to agent tooling
+            }
             String rel = prefix.isEmpty() ? kid.getName() : prefix + "/" + kid.getName();
             if (kid.isDirectory()) {
                 collectPaths(kid, rel, out);
@@ -381,49 +500,61 @@ public class CraftStore {
 
     // ------------------------------------------------------------ snapshots
 
-    /** Immutable copy of the workspace. buildId attaches a stored build to this snapshot. */
-    public SnapshotInfo createSnapshot(String appId, String message, String buildId) throws IOException, JSONException {
-        requireApp(appId);
-        String snapshotId = UUID.randomUUID().toString();
-        File filesDir = new File(new File(snapshotsDir(appId), snapshotId), "files");
-        copyDir(workspaceDir(appId), filesDir);
+    /**
+     * Commits the current workspace state as a snapshot. buildId attaches a stored build
+     * to this snapshot.
+     */
+    public SnapshotInfo createSnapshot(String giftId, String message, String buildId) throws IOException, JSONException {
+        requireGift(giftId);
+        String commitMessage = message == null ? "" : message;
+        String snapshotId;
+        long createdAt;
+        try (Git git = openWorkspaceGit(giftId)) {
+            git.add().addFilepattern(".").call();
+            git.add().setUpdate(true).addFilepattern(".").call(); // also stage deletions
+            PersonIdent ident = new PersonIdent("Craft", "craft@localhost");
+            RevCommit commit = git.commit()
+                    .setMessage(commitMessage)
+                    .setAuthor(ident)
+                    .setCommitter(ident)
+                    .setAllowEmpty(true) // snapshot an unchanged workspace too
+                    .call();
+            snapshotId = commit.getName();
+            createdAt = commit.getCommitTime() * 1000L;
+        } catch (GitAPIException e) {
+            throw new IOException("Could not create snapshot", e);
+        }
 
         JSONObject meta = new JSONObject();
         meta.put("id", snapshotId);
-        meta.put("message", message == null ? "" : message);
-        meta.put("createdAt", System.currentTimeMillis());
+        meta.put("message", commitMessage);
+        meta.put("createdAt", createdAt);
         if (buildId != null) {
             meta.put("buildId", buildId);
         }
-        atomicWriteString(metaFile(appId, snapshotId), meta.toString());
+        atomicWriteString(metaFile(giftId, snapshotId), meta.toString());
         return snapshotFromMeta(meta);
     }
 
-    /** Snapshots, newest first. */
-    public List<SnapshotInfo> listSnapshots(String appId) throws IOException, JSONException {
-        requireApp(appId);
-        File[] snaps = snapshotsDir(appId).listFiles();
+    /** Snapshots (commits), newest first. */
+    public List<SnapshotInfo> listSnapshots(String giftId) throws IOException, JSONException {
+        requireGift(giftId);
         List<SnapshotInfo> out = new ArrayList<>();
-        if (snaps != null) {
-            for (File snap : snaps) {
-                File metaFile = new File(snap, META_FILE);
-                if (!metaFile.isFile()) {
-                    continue;
-                }
-                try {
-                    out.add(snapshotFromMeta(new JSONObject(readString(metaFile))));
-                } catch (JSONException ignored) {
-                    // skip unreadable snapshot metadata
-                }
+        try (Git git = openWorkspaceGit(giftId)) {
+            for (RevCommit commit : git.log().call()) {
+                out.add(snapshotFromCommit(giftId, commit));
             }
+        } catch (NoHeadException e) {
+            // no commits yet: an empty history is a valid result
+        } catch (GitAPIException e) {
+            throw new IOException("Could not list snapshots", e);
         }
-        out.sort(SNAPSHOT_NEWEST_FIRST);
         return out;
     }
 
-    public JSONObject readSnapshotMeta(String appId, String snapshotId) throws IOException, JSONException {
+    public JSONObject readSnapshotMeta(String giftId, String snapshotId) throws IOException, JSONException {
         checkSegment(snapshotId, "snapshot id");
-        File metaFile = metaFile(appId, snapshotId);
+        File metaFile = metaFile(giftId, snapshotId);
         if (!metaFile.isFile()) {
             throw new IllegalArgumentException("Unknown snapshot: " + snapshotId);
         }
@@ -435,20 +566,23 @@ public class CraftStore {
         return new SnapshotInfo(meta.optString("id"), meta.optString("message"), meta.optLong("createdAt"), buildId);
     }
 
-    private File snapshotsDir(String appId) {
-        return new File(appDir(appId), SNAPSHOTS_DIR);
-    }
-
-    private File metaFile(String appId, String snapshotId) {
-        return new File(new File(snapshotsDir(appId), snapshotId), META_FILE);
-    }
-
-    private static final Comparator<SnapshotInfo> SNAPSHOT_NEWEST_FIRST = new Comparator<SnapshotInfo>() {
-        @Override
-        public int compare(SnapshotInfo a, SnapshotInfo b) {
-            return Long.compare(b.createdAt, a.createdAt);
+    /** Snapshot info from a commit; buildId comes from the snapshot's meta.json when present. */
+    private SnapshotInfo snapshotFromCommit(String giftId, RevCommit commit) throws IOException, JSONException {
+        String buildId = null;
+        File meta = metaFile(giftId, commit.getName());
+        if (meta.isFile()) {
+            buildId = snapshotFromMeta(new JSONObject(readString(meta))).buildId;
         }
-    };
+        return new SnapshotInfo(commit.getName(), commit.getFullMessage(), commit.getCommitTime() * 1000L, buildId);
+    }
+
+    private File snapshotsDir(String giftId) {
+        return new File(giftDir(giftId), SNAPSHOTS_DIR);
+    }
+
+    private File metaFile(String giftId, String snapshotId) {
+        return new File(new File(snapshotsDir(giftId), snapshotId), META_FILE);
+    }
 
     // --------------------------------------------------------------- builds
 
@@ -457,11 +591,11 @@ public class CraftStore {
      * pointer is updated. When {@code snapshotId} is given, the build id is attached to that
      * snapshot's metadata.
      */
-    public String saveBuild(String appId, String snapshotId, String js, String css, boolean draft)
+    public String saveBuild(String giftId, String snapshotId, String js, String css, boolean draft)
             throws IOException, JSONException {
-        requireApp(appId);
+        requireGift(giftId);
         String buildId = UUID.randomUUID().toString();
-        File buildDir = new File(buildsDir(appId), buildId);
+        File buildDir = new File(buildsDir(giftId), buildId);
         if (!buildDir.exists() && !buildDir.mkdirs()) {
             throw new IOException("Could not create build directory");
         }
@@ -471,20 +605,20 @@ public class CraftStore {
         if (draft) {
             JSONObject pointer = new JSONObject();
             pointer.put("buildId", buildId);
-            atomicWriteString(new File(appDir(appId), DRAFT_POINTER), pointer.toString());
+            atomicWriteString(new File(giftDir(giftId), DRAFT_POINTER), pointer.toString());
         }
         if (snapshotId != null && !snapshotId.isEmpty()) {
-            JSONObject meta = readSnapshotMeta(appId, snapshotId);
+            JSONObject meta = readSnapshotMeta(giftId, snapshotId);
             meta.put("buildId", buildId);
-            atomicWriteString(metaFile(appId, snapshotId), meta.toString());
+            atomicWriteString(metaFile(giftId, snapshotId), meta.toString());
         }
         return buildId;
     }
 
-    public Build getBuild(String appId, String buildId) throws IOException {
-        requireApp(appId);
+    public Build getBuild(String giftId, String buildId) throws IOException {
+        requireGift(giftId);
         checkSegment(buildId, "build id");
-        File buildDir = new File(buildsDir(appId), buildId);
+        File buildDir = new File(buildsDir(giftId), buildId);
         if (!buildDir.isDirectory()) {
             throw new IllegalArgumentException("Unknown build: " + buildId);
         }
@@ -497,26 +631,26 @@ public class CraftStore {
     }
 
     /** draft/release build; rejects clearly when the pointer is missing. */
-    public Build getBuildFor(String appId, String environment) throws IOException, JSONException {
-        requireApp(appId);
+    public Build getBuildFor(String giftId, String environment) throws IOException, JSONException {
+        requireGift(giftId);
         String env = environment == null ? "" : environment;
         if (!"draft".equals(env) && !"release".equals(env)) {
             throw new IllegalArgumentException("Unknown environment: " + env);
         }
-        String buildId = pointerBuildId(appId, env);
+        String buildId = pointerBuildId(giftId, env);
         if (buildId == null) {
             if ("draft".equals(env)) {
-                throw new IllegalStateException("No draft build available for app " + appId
+                throw new IllegalStateException("No draft build available for gift " + giftId
                         + ". Save a build with draft:true first.");
             }
-            throw new IllegalStateException("No release build available for app " + appId
+            throw new IllegalStateException("No release build available for gift " + giftId
                     + ". Publish a snapshot first.");
         }
-        return getBuild(appId, buildId);
+        return getBuild(giftId, buildId);
     }
 
-    private String pointerBuildId(String appId, String environment) throws IOException {
-        File pointer = new File(appDir(appId), "draft".equals(environment) ? DRAFT_POINTER : RELEASE_POINTER);
+    private String pointerBuildId(String giftId, String environment) throws IOException {
+        File pointer = new File(giftDir(giftId), "draft".equals(environment) ? DRAFT_POINTER : RELEASE_POINTER);
         if (!pointer.isFile()) {
             return null;
         }
@@ -530,9 +664,9 @@ public class CraftStore {
     }
 
     /** Publishes a snapshot: requires a stored build, updates the release pointer. */
-    public AppInfo publish(String appId, String snapshotId) throws IOException, JSONException {
-        requireApp(appId);
-        JSONObject meta = readSnapshotMeta(appId, snapshotId);
+    public GiftInfo publish(String giftId, String snapshotId) throws IOException, JSONException {
+        requireGift(giftId);
+        JSONObject meta = readSnapshotMeta(giftId, snapshotId);
         String buildId = meta.has("buildId") && !meta.isNull("buildId") ? meta.optString("buildId") : null;
         if (buildId == null || buildId.isEmpty()) {
             throw new IllegalStateException("Snapshot " + snapshotId
@@ -540,41 +674,41 @@ public class CraftStore {
         }
         JSONObject pointer = new JSONObject();
         pointer.put("buildId", buildId);
-        atomicWriteString(new File(appDir(appId), RELEASE_POINTER), pointer.toString());
-        return updateAppRelease(appId, snapshotId);
+        atomicWriteString(new File(giftDir(giftId), RELEASE_POINTER), pointer.toString());
+        return updateGiftRelease(giftId, snapshotId);
     }
 
     /**
-     * Copies the target snapshot source into the workspace, creates a new snapshot
-     * ("Rollback to <id>") associated with the target build, and makes it the release.
+     * Restores the target snapshot's files into the workspace via checkout + clean
+     * (history stays linear; no hard reset), then creates a new snapshot
+     * ("Rollback to <id>") associated with the target build and makes it the release.
      */
-    public RollbackResult rollback(String appId, String snapshotId) throws IOException, JSONException {
-        requireApp(appId);
-        JSONObject targetMeta = readSnapshotMeta(appId, snapshotId);
+    public RollbackResult rollback(String giftId, String snapshotId) throws IOException, JSONException {
+        requireGift(giftId);
+        JSONObject targetMeta = readSnapshotMeta(giftId, snapshotId);
         String targetBuildId = targetMeta.has("buildId") && !targetMeta.isNull("buildId")
                 ? targetMeta.optString("buildId")
                 : null;
 
-        File sourceFiles = new File(new File(snapshotsDir(appId), snapshotId), "files");
-        File workspace = workspaceDir(appId);
-        deleteRecursively(workspace);
-        if (!workspace.mkdirs()) {
-            throw new IOException("Could not recreate workspace directory");
+        try (Git git = openWorkspaceGit(giftId)) {
+            git.checkout().setStartPoint(snapshotId).addPath(".").call();
+            git.clean().setCleanDirectories(true).call(); // drop files created after the target
+        } catch (IOException | GitAPIException e) {
+            throw new IOException("Could not restore snapshot " + snapshotId, e);
         }
-        copyDir(sourceFiles, workspace);
 
-        SnapshotInfo snapshot = createSnapshot(appId, "Rollback to " + snapshotId, targetBuildId);
+        SnapshotInfo snapshot = createSnapshot(giftId, "Rollback to " + snapshotId, targetBuildId);
         if (targetBuildId != null) {
             JSONObject pointer = new JSONObject();
             pointer.put("buildId", targetBuildId);
-            atomicWriteString(new File(appDir(appId), RELEASE_POINTER), pointer.toString());
+            atomicWriteString(new File(giftDir(giftId), RELEASE_POINTER), pointer.toString());
         }
-        AppInfo app = updateAppRelease(appId, snapshot.id);
-        return new RollbackResult(app, snapshot);
+        GiftInfo gift = updateGiftRelease(giftId, snapshot.id);
+        return new RollbackResult(gift, snapshot);
     }
 
-    private File buildsDir(String appId) {
-        return new File(appDir(appId), BUILDS_DIR);
+    private File buildsDir(String giftId) {
+        return new File(giftDir(giftId), BUILDS_DIR);
     }
 
     private static void checkSegment(String value, String what) {
@@ -683,51 +817,6 @@ public class CraftStore {
             return new String(bos.toByteArray(), StandardCharsets.UTF_8);
         } finally {
             fis.close();
-        }
-    }
-
-    private static void copyDir(File source, File target) throws IOException {
-        if (!source.exists()) {
-            //noinspection ResultOfMethodCallIgnored
-            target.mkdirs();
-            return;
-        }
-        if (!target.exists() && !target.mkdirs()) {
-            throw new IOException("Could not create directory: " + target);
-        }
-        File[] kids = source.listFiles();
-        if (kids == null) {
-            return;
-        }
-        for (File kid : kids) {
-            File dst = new File(target, kid.getName());
-            if (kid.isDirectory()) {
-                copyDir(kid, dst);
-            } else {
-                copyFile(kid, dst);
-            }
-        }
-    }
-
-    private static void copyFile(File source, File target) throws IOException {
-        File parent = target.getParentFile();
-        if (parent != null && !parent.exists() && !parent.mkdirs()) {
-            throw new IOException("Could not create directory: " + parent);
-        }
-        FileInputStream in = new FileInputStream(source);
-        try {
-            FileOutputStream out = new FileOutputStream(target);
-            try {
-                byte[] buffer = new byte[8192];
-                int read;
-                while ((read = in.read(buffer)) != -1) {
-                    out.write(buffer, 0, read);
-                }
-            } finally {
-                out.close();
-            }
-        } finally {
-            in.close();
         }
     }
 

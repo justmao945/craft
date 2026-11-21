@@ -1,4 +1,4 @@
-export interface AppDescriptor {
+export interface Gift {
   id: string
   name: string
   releaseSnapshotId?: string
@@ -13,7 +13,7 @@ export interface Snapshot {
 }
 
 export interface Workspace {
-  app: AppDescriptor
+  gift: Gift
   files: Record<string, string>
 }
 
@@ -27,7 +27,7 @@ export interface AgentConfig {
   apiKey: string
   baseUrl: string
   model: string
-  reasoningEffort: 'none' | 'low' | 'medium' | 'high'
+  reasoningEffort: 'none' | 'low' | 'high' | 'max'
 }
 
 export interface CompileResult {
@@ -41,4 +41,13 @@ export interface ChatMessage {
   role: 'user' | 'assistant' | 'status'
   text: string
   createdAt: number
+}
+
+/** App-level UI session: what to restore on cold start. */
+export interface SessionState {
+  activeGiftId?: string
+  activeTab?: 'chat' | 'discover' | 'gifts' | 'profile'
+  language?: 'zh' | 'en'
+  /** Unsent composer text, keyed by gift id ('' = unbound new-gift composer). */
+  drafts: Record<string, string>
 }

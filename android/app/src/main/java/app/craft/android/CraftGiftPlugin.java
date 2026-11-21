@@ -7,17 +7,18 @@ import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.util.Iterator;
 import java.util.List;
 
 /**
- * Source control + storage bridge for Craft apps: workspaces, immutable source
+ * Source control + storage bridge for Craft gifts: workspaces, immutable source
  * snapshots, immutable builds, draft/release pointers and agent configuration.
  */
-@CapacitorPlugin(name = "CraftProject")
-public class CraftProjectPlugin extends Plugin {
+@CapacitorPlugin(name = "CraftGift")
+public class CraftGiftPlugin extends Plugin {
 
     private CraftStore store;
 
@@ -26,37 +27,37 @@ public class CraftProjectPlugin extends Plugin {
         store = new CraftStore(getContext());
     }
 
-    // ------------------------------------------------------------------ apps
+    // ----------------------------------------------------------------- gifts
 
     @PluginMethod
-    public void listApps(PluginCall call) {
+    public void listGifts(PluginCall call) {
         try {
-            JSArray apps = new JSArray();
-            for (CraftStore.AppInfo app : store.listApps()) {
-                apps.put(appJson(app));
+            JSArray gifts = new JSArray();
+            for (CraftStore.GiftInfo gift : store.listGifts()) {
+                gifts.put(giftJson(gift));
             }
             JSObject ret = new JSObject();
-            ret.put("apps", apps);
+            ret.put("gifts", gifts);
             call.resolve(ret);
         } catch (Exception e) {
-            call.reject("Could not list apps: " + e.getMessage(), e);
+            call.reject("Could not list gifts: " + e.getMessage(), e);
         }
     }
 
     @PluginMethod
-    public void createApp(PluginCall call) {
+    public void createGift(PluginCall call) {
         String name = call.getString("name");
         if (name == null || name.trim().isEmpty()) {
             call.reject("name is required");
             return;
         }
         try {
-            CraftStore.AppInfo app = store.createApp(name);
+            CraftStore.GiftInfo gift = store.createGift(name);
             JSObject ret = new JSObject();
-            ret.put("app", appJson(app));
+            ret.put("gift", giftJson(gift));
             call.resolve(ret);
         } catch (Exception e) {
-            call.reject("Could not create app: " + e.getMessage(), e);
+            call.reject("Could not create gift: " + e.getMessage(), e);
         }
     }
 
@@ -64,13 +65,13 @@ public class CraftProjectPlugin extends Plugin {
 
     @PluginMethod
     public void getWorkspace(PluginCall call) {
-        String appId = requiredString(call, "appId", "appId");
-        if (appId == null) {
+        String giftId = requiredString(call, "giftId", "giftId");
+        if (giftId == null) {
             return;
         }
         try {
-            CraftStore.AppInfo app = store.requireApp(appId);
-            JSONObject files = store.workspaceFiles(appId);
+            CraftStore.GiftInfo gift = store.requireGift(giftId);
+            JSONObject files = store.workspaceFiles(giftId);
             JSObject filesOut = new JSObject();
             Iterator<String> keys = files.keys();
             while (keys.hasNext()) {
@@ -78,7 +79,7 @@ public class CraftProjectPlugin extends Plugin {
                 filesOut.put(key, files.getString(key));
             }
             JSObject ret = new JSObject();
-            ret.put("app", appJson(app));
+            ret.put("gift", giftJson(gift));
             ret.put("files", filesOut);
             call.resolve(ret);
         } catch (Exception e) {
@@ -88,12 +89,12 @@ public class CraftProjectPlugin extends Plugin {
 
     @PluginMethod
     public void listFiles(PluginCall call) {
-        String appId = requiredString(call, "appId", "appId");
-        if (appId == null) {
+        String giftId = requiredString(call, "giftId", "giftId");
+        if (giftId == null) {
             return;
         }
         try {
-            List<String> files = store.listWorkspaceFiles(appId);
+            List<String> files = store.listWorkspaceFiles(giftId);
             JSArray arr = new JSArray();
             for (String path : files) {
                 arr.put(path);
@@ -108,13 +109,13 @@ public class CraftProjectPlugin extends Plugin {
 
     @PluginMethod
     public void readFile(PluginCall call) {
-        String appId = requiredString(call, "appId", "appId");
+        String giftId = requiredString(call, "giftId", "giftId");
         String path = requiredString(call, "path", "path");
-        if (appId == null || path == null) {
+        if (giftId == null || path == null) {
             return;
         }
         try {
-            String content = store.readFile(appId, path);
+            String content = store.readFile(giftId, path);
             JSObject ret = new JSObject();
             ret.put("content", content);
             call.resolve(ret);
@@ -125,17 +126,17 @@ public class CraftProjectPlugin extends Plugin {
 
     @PluginMethod
     public void writeFile(PluginCall call) {
-        String appId = requiredString(call, "appId", "appId");
+        String giftId = requiredString(call, "giftId", "giftId");
         String path = requiredString(call, "path", "path");
         String content = call.getString("content");
-        if (appId == null || path == null || content == null) {
-            if (content == null && appId != null && path != null) {
+        if (giftId == null || path == null || content == null) {
+            if (content == null && giftId != null && path != null) {
                 call.reject("content is required");
             }
             return;
         }
         try {
-            store.writeFile(appId, path, content);
+            store.writeFile(giftId, path, content);
             call.resolve(new JSObject().put("ok", true));
         } catch (Exception e) {
             call.reject("Could not write file: " + e.getMessage(), e);
@@ -146,13 +147,13 @@ public class CraftProjectPlugin extends Plugin {
 
     @PluginMethod
     public void createSnapshot(PluginCall call) {
-        String appId = requiredString(call, "appId", "appId");
-        if (appId == null) {
+        String giftId = requiredString(call, "giftId", "giftId");
+        if (giftId == null) {
             return;
         }
         String message = call.getString("message", "");
         try {
-            CraftStore.SnapshotInfo snapshot = store.createSnapshot(appId, message, null);
+            CraftStore.SnapshotInfo snapshot = store.createSnapshot(giftId, message, null);
             JSObject ret = new JSObject();
             ret.put("snapshot", snapshotJson(snapshot));
             call.resolve(ret);
@@ -163,13 +164,13 @@ public class CraftProjectPlugin extends Plugin {
 
     @PluginMethod
     public void listSnapshots(PluginCall call) {
-        String appId = requiredString(call, "appId", "appId");
-        if (appId == null) {
+        String giftId = requiredString(call, "giftId", "giftId");
+        if (giftId == null) {
             return;
         }
         try {
             JSArray arr = new JSArray();
-            for (CraftStore.SnapshotInfo snapshot : store.listSnapshots(appId)) {
+            for (CraftStore.SnapshotInfo snapshot : store.listSnapshots(giftId)) {
                 arr.put(snapshotJson(snapshot));
             }
             JSObject ret = new JSObject();
@@ -184,11 +185,11 @@ public class CraftProjectPlugin extends Plugin {
 
     @PluginMethod
     public void saveBuild(PluginCall call) {
-        String appId = requiredString(call, "appId", "appId");
+        String giftId = requiredString(call, "giftId", "giftId");
         String js = call.getString("js");
         String css = call.getString("css");
-        if (appId == null || js == null || css == null) {
-            if (appId != null) {
+        if (giftId == null || js == null || css == null) {
+            if (giftId != null) {
                 call.reject(js == null ? "js is required" : "css is required");
             }
             return;
@@ -196,7 +197,7 @@ public class CraftProjectPlugin extends Plugin {
         String snapshotId = call.getString("snapshotId");
         boolean draft = call.getBoolean("draft", Boolean.FALSE);
         try {
-            String buildId = store.saveBuild(appId, snapshotId, js, css, draft);
+            String buildId = store.saveBuild(giftId, snapshotId, js, css, draft);
             JSObject ret = new JSObject();
             ret.put("buildId", buildId);
             call.resolve(ret);
@@ -216,12 +217,12 @@ public class CraftProjectPlugin extends Plugin {
     }
 
     private void getBuildByEnvironment(PluginCall call, String environment) {
-        String appId = requiredString(call, "appId", "appId");
-        if (appId == null) {
+        String giftId = requiredString(call, "giftId", "giftId");
+        if (giftId == null) {
             return;
         }
         try {
-            CraftStore.Build build = store.getBuildFor(appId, environment);
+            CraftStore.Build build = store.getBuildFor(giftId, environment);
             JSObject ret = new JSObject();
             ret.put("buildId", build.buildId);
             ret.put("js", build.js);
@@ -236,15 +237,15 @@ public class CraftProjectPlugin extends Plugin {
 
     @PluginMethod
     public void publish(PluginCall call) {
-        String appId = requiredString(call, "appId", "appId");
+        String giftId = requiredString(call, "giftId", "giftId");
         String snapshotId = requiredString(call, "snapshotId", "snapshotId");
-        if (appId == null || snapshotId == null) {
+        if (giftId == null || snapshotId == null) {
             return;
         }
         try {
-            CraftStore.AppInfo app = store.publish(appId, snapshotId);
+            CraftStore.GiftInfo gift = store.publish(giftId, snapshotId);
             JSObject ret = new JSObject();
-            ret.put("app", appJson(app));
+            ret.put("gift", giftJson(gift));
             call.resolve(ret);
         } catch (Exception e) {
             call.reject("Could not publish: " + e.getMessage(), e);
@@ -253,15 +254,15 @@ public class CraftProjectPlugin extends Plugin {
 
     @PluginMethod
     public void rollback(PluginCall call) {
-        String appId = requiredString(call, "appId", "appId");
+        String giftId = requiredString(call, "giftId", "giftId");
         String snapshotId = requiredString(call, "snapshotId", "snapshotId");
-        if (appId == null || snapshotId == null) {
+        if (giftId == null || snapshotId == null) {
             return;
         }
         try {
-            CraftStore.RollbackResult result = store.rollback(appId, snapshotId);
+            CraftStore.RollbackResult result = store.rollback(giftId, snapshotId);
             JSObject ret = new JSObject();
-            ret.put("app", appJson(result.app));
+            ret.put("gift", giftJson(result.gift));
             ret.put("snapshot", snapshotJson(result.snapshot));
             call.resolve(ret);
         } catch (Exception e) {
@@ -308,12 +309,12 @@ public class CraftProjectPlugin extends Plugin {
 
     @PluginMethod
     public void getConversation(PluginCall call) {
-        String appId = requiredString(call, "appId", "appId");
-        if (appId == null) {
+        String giftId = requiredString(call, "giftId", "giftId");
+        if (giftId == null) {
             return;
         }
         try {
-            call.resolve(new JSObject().put("json", store.readConversation(appId)));
+            call.resolve(new JSObject().put("json", store.readConversation(giftId)));
         } catch (Exception e) {
             call.reject("Could not read conversation: " + e.getMessage(), e);
         }
@@ -321,8 +322,8 @@ public class CraftProjectPlugin extends Plugin {
 
     @PluginMethod
     public void saveConversation(PluginCall call) {
-        String appId = requiredString(call, "appId", "appId");
-        if (appId == null) {
+        String giftId = requiredString(call, "giftId", "giftId");
+        if (giftId == null) {
             return;
         }
         String json = call.getString("json");
@@ -331,10 +332,103 @@ public class CraftProjectPlugin extends Plugin {
             return;
         }
         try {
-            store.writeConversation(appId, json);
+            store.writeConversation(giftId, json);
             call.resolve(new JSObject().put("ok", true));
         } catch (Exception e) {
             call.reject("Could not save conversation: " + e.getMessage(), e);
+        }
+    }
+
+    @PluginMethod
+    public void getModelContext(PluginCall call) {
+        String giftId = requiredString(call, "giftId", "giftId");
+        if (giftId == null) return;
+        try {
+            call.resolve(new JSObject().put("jsonl", store.readModelContext(giftId)));
+        } catch (Exception e) {
+            call.reject("Could not read model context: " + e.getMessage(), e);
+        }
+    }
+
+    @PluginMethod
+    public void saveModelContext(PluginCall call) {
+        String giftId = requiredString(call, "giftId", "giftId");
+        if (giftId == null) return;
+        try {
+            store.writeModelContext(giftId, call.getString("jsonl"));
+            call.resolve(new JSObject().put("ok", true));
+        } catch (Exception e) {
+            call.reject("Could not save model context: " + e.getMessage(), e);
+        }
+    }
+
+    @PluginMethod
+    public void archiveModelContext(PluginCall call) {
+        String giftId = requiredString(call, "giftId", "giftId");
+        if (giftId == null) return;
+        try {
+            call.resolve(new JSObject().put("file", store.archiveModelContext(giftId, call.getString("jsonl"))));
+        } catch (Exception e) {
+            call.reject("Could not archive model context: " + e.getMessage(), e);
+        }
+    }
+
+    @PluginMethod
+    public void listContextArchives(PluginCall call) {
+        String giftId = requiredString(call, "giftId", "giftId");
+        if (giftId == null) return;
+        try {
+            call.resolve(new JSObject().put("files", new JSONArray(store.listContextArchives(giftId))));
+        } catch (Exception e) {
+            call.reject("Could not list context archives: " + e.getMessage(), e);
+        }
+    }
+
+    @PluginMethod
+    public void readContextArchive(PluginCall call) {
+        String giftId = requiredString(call, "giftId", "giftId");
+        String file = requiredString(call, "file", "file");
+        if (giftId == null || file == null) return;
+        try {
+            call.resolve(new JSObject().put("jsonl", store.readContextArchive(giftId, file)));
+        } catch (Exception e) {
+            call.reject("Could not read context archive: " + e.getMessage(), e);
+        }
+    }
+
+    @PluginMethod
+    public void deleteGift(PluginCall call) {
+        String giftId = requiredString(call, "giftId", "giftId");
+        if (giftId == null) return;
+        try {
+            store.deleteGift(giftId);
+            call.resolve(new JSObject().put("ok", true));
+        } catch (Exception e) {
+            call.reject("Could not delete gift: " + e.getMessage(), e);
+        }
+    }
+
+    @PluginMethod
+    public void getSession(PluginCall call) {
+        try {
+            call.resolve(new JSObject().put("json", store.readSession()));
+        } catch (Exception e) {
+            call.reject("Could not read session: " + e.getMessage(), e);
+        }
+    }
+
+    @PluginMethod
+    public void saveSession(PluginCall call) {
+        String json = call.getString("json");
+        if (json == null) {
+            call.reject("json is required");
+            return;
+        }
+        try {
+            store.writeSession(json);
+            call.resolve(new JSObject().put("ok", true));
+        } catch (Exception e) {
+            call.reject("Could not save session: " + e.getMessage(), e);
         }
     }
 
@@ -349,13 +443,13 @@ public class CraftProjectPlugin extends Plugin {
         return value;
     }
 
-    private static JSObject appJson(CraftStore.AppInfo app) {
+    private static JSObject giftJson(CraftStore.GiftInfo gift) {
         JSObject obj = new JSObject();
-        obj.put("id", app.id);
-        obj.put("name", app.name);
-        obj.put("updatedAt", app.updatedAt);
-        if (app.releaseSnapshotId != null) {
-            obj.put("releaseSnapshotId", app.releaseSnapshotId);
+        obj.put("id", gift.id);
+        obj.put("name", gift.name);
+        obj.put("updatedAt", gift.updatedAt);
+        if (gift.releaseSnapshotId != null) {
+            obj.put("releaseSnapshotId", gift.releaseSnapshotId);
         }
         return obj;
     }

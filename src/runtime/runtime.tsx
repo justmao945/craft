@@ -4,13 +4,13 @@ import { Fragment, jsx, jsxs } from 'react/jsx-runtime'
 
 declare global {
   interface Window {
-    CRAFT_CONTEXT?: { appId: string; environment: 'draft' | 'release' }
+    CRAFT_CONTEXT?: { giftId: string; environment: 'draft' | 'release' }
   }
 }
 
 const key = (name: string) => {
-  const context = window.CRAFT_CONTEXT ?? { appId: 'browser', environment: 'draft' }
-  return `craft:${context.appId}:${context.environment}:${name}`
+  const context = window.CRAFT_CONTEXT ?? { giftId: 'unknown', environment: 'draft' }
+  return `craft:${context.giftId}:${context.environment}:${name}`
 }
 
 const storage = {

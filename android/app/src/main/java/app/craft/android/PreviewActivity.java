@@ -36,7 +36,7 @@ public class PreviewActivity extends Activity {
         void onResult(String value);
     }
 
-    public static final String EXTRA_APP_ID = "appId";
+    public static final String EXTRA_GIFT_ID = "giftId";
     public static final String EXTRA_ENVIRONMENT = "environment";
     public static final String EXTRA_TITLE = "title";
 
@@ -48,7 +48,7 @@ public class PreviewActivity extends Activity {
 
     private WebView webView;
     private CraftStore store;
-    private String appId;
+    private String giftId;
     private String environment;
 
     private final Object logLock = new Object();
@@ -109,7 +109,7 @@ public class PreviewActivity extends Activity {
 
     /** Loads (or reloads) the build described by the intent extras. */
     public void applyIntent(Intent intent) {
-        appId = intent.getStringExtra(EXTRA_APP_ID);
+        giftId = intent.getStringExtra(EXTRA_GIFT_ID);
         environment = intent.getStringExtra(EXTRA_ENVIRONMENT);
         String title = intent.getStringExtra(EXTRA_TITLE);
         setTitle(title == null || title.trim().isEmpty() ? "Craft Preview" : title.trim());
@@ -119,7 +119,7 @@ public class PreviewActivity extends Activity {
     private void loadCurrentBuild() {
         CraftStore.Build build;
         try {
-            build = store.getBuildFor(appId, environment);
+            build = store.getBuildFor(giftId, environment);
         } catch (Exception e) {
             String message = e.getMessage() == null ? "Unknown error" : e.getMessage();
             addLog("[preview] " + message);
@@ -162,10 +162,10 @@ public class PreviewActivity extends Activity {
     private String contextJson() {
         JSONObject ctx = new JSONObject();
         try {
-            ctx.put("appId", appId == null ? "" : appId);
+            ctx.put("giftId", giftId == null ? "" : giftId);
             ctx.put("environment", environment == null ? "draft" : environment);
         } catch (Exception ignored) {
-            // appId/environment are plain strings; put cannot fail
+            // giftId/environment are plain strings; put cannot fail
         }
         return ctx.toString();
     }
