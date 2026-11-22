@@ -8,14 +8,6 @@
     android:viewportWidth="24"
     android:viewportHeight="24">
     <group
-        android:scaleX="0.20"
-        android:scaleY="0.20"
-        android:translateX="9.6"
-        android:translateY="9.6">
-        android:scaleX="0.36"
-        android:scaleY="0.36"
-        android:translateX="7.68"
-        android:translateY="7.68">
         android:scaleX="0.35"
         android:scaleY="0.35"
         android:translateX="7.8"
