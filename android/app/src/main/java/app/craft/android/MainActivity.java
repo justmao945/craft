@@ -22,7 +22,6 @@ public class MainActivity extends BridgeActivity {
         // through during WebView startup instead of a flat blank backdrop. The page's
         // own opaque backgrounds (--bg) take over as soon as HTML renders.
         webView.setBackgroundColor(android.graphics.Color.TRANSPARENT);
-        setTheme(R.style.AppTheme_NoActionBar);
         WindowInsetsControllerCompat systemBars = new WindowInsetsControllerCompat(getWindow(), webView);
         systemBars.setAppearanceLightStatusBars(true);
         systemBars.setAppearanceLightNavigationBars(true);

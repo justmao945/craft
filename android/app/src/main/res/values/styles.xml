@@ -21,5 +21,6 @@
         <item name="android:windowSplashScreenBackground">@color/boot_bg</item>
         <item name="android:windowSplashScreenAnimatedIcon">@drawable/boot_mark_splash</item>
         <item name="android:windowBackground">@drawable/boot_background</item>
+        <item name="postSplashScreenTheme">@style/AppTheme.NoActionBar</item>
     </style>
 </resources>

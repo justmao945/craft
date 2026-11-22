@@ -9,6 +9,7 @@ import {
 import type { LucideIcon } from 'lucide-react'
 import { AgentRuntime, AGENT_ROUND_STATUS_PREFIX, SUBAGENT_STATUS_PREFIX } from './agent/AgentRuntime'
 import { COMPACTION_STATUS } from './agent/context'
+import { SplashScreen } from '@capacitor/splash-screen'
 import { generalStore, giftStore, runtime } from './native/craft'
 import { detectLanguage, isMessageKey, translate } from './i18n'
 import type { Language, MessageKey } from './i18n'
@@ -94,6 +95,12 @@ export default function App() {
   const runningAgentRef = useRef<AgentRuntime | undefined>(undefined)
   const sessionRef = useRef<SessionState>({ drafts: {} })
   const sessionReady = useRef(false)
+
+  // First committed frame of any branch (splash, gate or main UI) hides the
+  // Capacitor launch splash; no-op in the browser where the plugin is absent.
+  useEffect(() => {
+    void SplashScreen.hide({ fadeOutDuration: 200 }).catch(() => {})
+  }, [])
   // Keep refs in lockstep with state: agent hooks and persistence run outside render.
   const messagesRef = useRef<ChatMessage[]>(messages)
   const generalMessagesRef = useRef<ChatMessage[]>(messages)
