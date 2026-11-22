@@ -26,13 +26,25 @@ const AssistantMessageSchema = z.object({
   })).optional(),
 })
 const AssistantResponseSchema = z.object({
-  choices: z.array(z.object({ message: AssistantMessageSchema })).min(1),
+  choices: z.array(z.object({
+    message: AssistantMessageSchema,
+    finish_reason: z.string().optional(),
+  })).min(1),
+  usage: z.object({ prompt_tokens: z.number() }).optional(),
 })
 const ModelErrorSchema = z.object({ error: z.object({ message: z.string() }) })
 const ToolArgumentsSchema = z.record(z.string(), z.unknown())
 
-function parseAssistantMessage(payload: unknown): AssistantMessage {
-  return AssistantResponseSchema.parse(payload).choices[0].message
+/** Per-runLoop provider telemetry: the live prompt usage drives the compaction trigger. */
+interface UsageState {
+  promptTokens: number
+  finishReason?: string
+}
+
+/** Provider context-overflow signatures; matched like omp before forcing a compaction retry. */
+function isContextOverflow(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return /maximum context length|context[_ ]length|too many tokens|prompt is too long|input (is )?too long/i.test(message)
 }
 
 function stringArgument(args: ToolArguments, key: string, allowEmpty = false): string {
@@ -133,9 +145,12 @@ const generalTools = toolsNamed(GENERAL_TOOL_NAMES)
 const projectTools = toolsNamed(PROJECT_TOOL_NAMES)
 const subagentTools = toolsNamed(SUBAGENT_TOOL_NAMES)
 
-/** Serialized-size trigger and verbatim recent tail for image compaction. */
-const CONTEXT_CHAR_LIMIT = 60_000
+/** Usage-based compaction trigger (omp-style): fire at TRIGGER percent of the model window. */
+const DEFAULT_CONTEXT_WINDOW_TOKENS = 1_000_000
+const DEFAULT_COMPACTION_PERCENT = 30
 const RECENT_CHAR_LIMIT = 20_000
+/** Minimum archivable size; below this a threshold pass reclaims too little and would churn archives. */
+const MIN_ARCHIVE_CHARS = 20_000
 
 export class AgentRuntime {
   private messages: ModelMessage[] = [{ role: 'system', content: giftSystemPrompt }]
@@ -143,6 +158,9 @@ export class AgentRuntime {
   private currentGiftName = ''
   private lastBuild: { giftId: string; artifact: BuildArtifact } | undefined
   private running = false
+  /** Cumulative file operations for the omp-style <files> section in compaction notes. */
+  private readonly filesRead = new Set<string>()
+  private readonly filesModified = new Set<string>()
 
   constructor(private readonly hooks: AgentHooks, gift?: Gift, private readonly mode: 'gift' | 'general' = 'gift') {
     if (mode === 'general') this.messages[0] = { role: 'system', content: generalSystemPrompt }
@@ -184,7 +202,9 @@ export class AgentRuntime {
     this.messages.push({ role: 'user', content: prompt })
     try {
       const activeTools = this.currentGiftId ? projectTools : this.mode === 'general' ? generalTools : unboundTools
-      const text = await this.runLoop(config, this.messages, activeTools, 18)
+      // omp runs its loop without a fixed cap (bounded by compaction and the user's abort);
+      // Craft keeps a hard guard against runaway spend but sizes it for large multi-file tasks.
+      const text = await this.runLoop(config, this.messages, activeTools, 32)
       this.hooks.onAssistant(text)
     } finally {
       this.running = false
@@ -194,12 +214,18 @@ export class AgentRuntime {
 
   /** Shared main/subagent loop: model rounds, tool execution and deferred screenshot attachment. */
   private async runLoop(config: AgentConfig, messages: ModelMessage[], activeTools: typeof tools, maxRounds: number, statusPrefix = ''): Promise<string> {
+    const usage: UsageState = { promptTokens: 0 }
+    const contextWindow = config.contextWindow && config.contextWindow > 0 ? config.contextWindow : DEFAULT_CONTEXT_WINDOW_TOKENS
+    const percent = config.compactionPercent && config.compactionPercent > 0 && config.compactionPercent <= 100
+      ? config.compactionPercent
+      : DEFAULT_COMPACTION_PERCENT
+    const triggerTokens = Math.floor(contextWindow * percent / 100)
     let pendingScreenshot: string | undefined
     let screenshotMessage: ModelMessage | undefined
     for (let round = 0; round < maxRounds; round++) {
-      await this.compactIfNeeded(messages)
+      await this.compactIfNeeded(messages, usage, triggerTokens)
       this.hooks.onStatus(`${statusPrefix}${AGENT_ROUND_STATUS_PREFIX}${round + 1}: reasoning`)
-      const assistant = await this.requestAssistant(config, messages, activeTools)
+      const assistant = await this.requestWithRecovery(config, messages, activeTools, usage, triggerTokens)
       if (screenshotMessage) {
         // Only the newest screenshot stays in context; drop the previous one (if not archived already).
         const index = messages.indexOf(screenshotMessage)
@@ -241,25 +267,63 @@ export class AgentRuntime {
         pendingScreenshot = undefined
       }
     }
-    throw new Error(`Agent reached the ${maxRounds}-round safety limit`)
+    // omp-style auto-continue: at the round budget, return one wrap-up summary instead of a hard error.
+    this.hooks.onStatus(`${statusPrefix}${AGENT_ROUND_STATUS_PREFIX}${maxRounds}: wrap-up`)
+    messages.push({
+      role: 'user',
+      content: `You reached the ${maxRounds}-round budget for this turn. Make no further tool calls; reply with a concise summary of what changed and what remains.`,
+    })
+    try {
+      const wrapUp = await this.requestAssistant(config, messages, [], usage)
+      return wrapUp.content ?? 'Done'
+    } catch {
+      throw new Error(`Agent reached the ${maxRounds}-round safety limit`)
+    }
   }
 
   /**
-   * Snapcompact-style maintenance: once the transcript grows past CONTEXT_CHAR_LIMIT,
-   * the oldest messages become paged PNG archives (oldest pages dropped past the frame
-   * budget); raw JSONL is archived on disk first, so detail stays recoverable.
+   * omp-style recovery: on a provider context-overflow error, or a `length` finish reason
+   * (output/context cap), compact locally (no model call involved) and retry once. Without
+   * progress — nothing archivable — the original failure or truncated message stands.
    */
-  private async compactIfNeeded(messages: ModelMessage[]): Promise<void> {
-    if (contextChars(messages) < CONTEXT_CHAR_LIMIT) return
+  private async requestWithRecovery(config: AgentConfig, messages: ModelMessage[], activeTools: typeof tools, usage: UsageState, triggerTokens: number): Promise<AssistantMessage> {
+    try {
+      const assistant = await this.requestAssistant(config, messages, activeTools, usage)
+      if (usage.finishReason !== 'length') return assistant
+      if (await this.compactIfNeeded(messages, usage, triggerTokens, true)) {
+        return await this.requestAssistant(config, messages, activeTools, usage)
+      }
+      return assistant
+    } catch (error) {
+      if (!isContextOverflow(error)) throw error
+      if (!(await this.compactIfNeeded(messages, usage, triggerTokens, true))) throw error
+      return await this.requestAssistant(config, messages, activeTools, usage)
+    }
+  }
+
+  /**
+   * Snapcompact-style maintenance (omp reference): once the provider-reported prompt usage
+   * crosses the trigger (compactionPercent of the configured context window, 300k tokens by
+   * default), the oldest messages become paged PNG archives (oldest pages dropped past the
+   * frame budget); raw JSONL is archived on disk first, so detail stays recoverable.
+   * `force` bypasses trigger and minimum-savings for overflow recovery. Usage measured
+   * before a compaction no longer describes the context, so it resets here (like omp).
+   */
+  private async compactIfNeeded(messages: ModelMessage[], usage: UsageState, triggerTokens: number, force = false): Promise<boolean> {
+    if (!force && usage.promptTokens < triggerTokens) return false
     const cut = findCompactionCut(messages, RECENT_CHAR_LIMIT)
     const archived = messages.slice(1, cut)
-    if (!archived.length) return
+    if (!archived.length) return false
+    if (!force && contextChars(archived) < MIN_ARCHIVE_CHARS) return false
+    usage.promptTokens = 0
     this.hooks.onStatus(COMPACTION_STATUS)
     await this.hooks.onArchive?.(encodeContextJsonl(archived))
     const { images, droppedPages } = renderContextImages(archived)
+    const files = this.fileOperationLines()
     const note = `[Context compacted] ${archived.length} earlier messages are rendered in the attached ${images.length} archive page image(s).`
       + (droppedPages ? ` ${droppedPages} oldest page(s) did not fit the frame budget and are only in the JSONL archive.` : '')
       + ' Full raw JSONL was archived on device; use list_context_archives/read_context_archive to recover details.'
+      + (files.length ? `\n\n<files>\n${files.join('\n')}\n</files>` : '')
     const replacement: ModelMessage = {
       role: 'user',
       content: [
@@ -268,6 +332,22 @@ export class AgentRuntime {
       ],
     }
     messages.splice(1, cut - 1, replacement)
+    return true
+  }
+
+  /** omp-style cumulative file-operation list: (Read) never modified, (Write) modified unread, (RW) both. */
+  private fileOperationLines(): string[] {
+    const paths = [...new Set([...this.filesRead, ...this.filesModified])].sort()
+    const lines: string[] = []
+    for (const path of paths) {
+      if (lines.length >= 20) {
+        lines.push(`[…${paths.length - 20} files elided…]`)
+        break
+      }
+      const modified = this.filesModified.has(path)
+      lines.push(`${path} (${modified ? this.filesRead.has(path) ? 'RW' : 'Write' : 'Read'})`)
+    }
+    return lines
   }
 
   private async runSubagent(task: string, config: AgentConfig): Promise<unknown> {
@@ -279,7 +359,7 @@ export class AgentRuntime {
     return { ok: true, report }
   }
 
-  private async requestAssistant(config: AgentConfig, messages: ModelMessage[], activeTools: typeof tools): Promise<AssistantMessage> {
+  private async requestAssistant(config: AgentConfig, messages: ModelMessage[], activeTools: typeof tools, usage: UsageState): Promise<AssistantMessage> {
     const { baseUrl, apiKey, model, reasoningEffort } = config
     if (!baseUrl.startsWith('https://')) throw new Error('Model endpoint must use HTTPS')
     const body = {
@@ -298,7 +378,10 @@ export class AgentRuntime {
       const apiError = ModelErrorSchema.safeParse(payload)
       throw new Error(apiError.success ? apiError.data.error.message : `Model request failed (${status})`)
     }
-    return parseAssistantMessage(payload)
+    const parsed = AssistantResponseSchema.parse(payload)
+    if (parsed.usage) usage.promptTokens = parsed.usage.prompt_tokens
+    usage.finishReason = parsed.choices[0]?.finish_reason
+    return parsed.choices[0].message
   }
 
   private async executeTool(name: string, args: ToolArguments, config: AgentConfig): Promise<unknown> {
@@ -321,6 +404,7 @@ export class AgentRuntime {
       case 'read_file': {
         const path = stringArgument(args, 'path')
         const content = this.mode === 'general' ? await generalStore.readFile(path) : await giftStore.readFile(this.giftId(), path)
+        this.filesRead.add(path)
         return { path, ...sliceFileLines(content, optionalNumber(args, 'offset'), optionalNumber(args, 'limit')) }
       }
       case 'write_file': {
@@ -328,6 +412,7 @@ export class AgentRuntime {
         const content = stringArgument(args, 'content', true)
         if (this.mode === 'general') await generalStore.writeFile(path, content)
         else await giftStore.writeFile(this.giftId(), path, content)
+        this.filesModified.add(path)
         return { ok: true, path }
       }
       case 'edit_file': {
@@ -336,6 +421,7 @@ export class AgentRuntime {
         const edit = applyFileEdit(current, stringArgument(args, 'old_string'), stringArgument(args, 'new_string', true), args.replace_all === true)
         if (this.mode === 'general') await generalStore.writeFile(path, edit.content)
         else await giftStore.writeFile(this.giftId(), path, edit.content)
+        this.filesModified.add(path)
         return { ok: true, path, replacements: edit.replacements }
       }
       case 'build_gift':

@@ -841,7 +841,7 @@ public class CraftStore {
      * AES/GCM encrypted with an Android Keystore key and never logged. Missing optional
      * fields keep their previous values.
      */
-    public synchronized void setAgentConfig(String apiKey, String baseUrl, String model, String reasoningEffort)
+    public synchronized void setAgentConfig(String apiKey, String baseUrl, String model, String reasoningEffort, Long contextWindow, Double compactionPercent)
             throws IOException, GeneralSecurityException, JSONException {
         JSONObject config = readAgentConfig();
         if (apiKey != null && !apiKey.isEmpty()) {
@@ -855,6 +855,12 @@ public class CraftStore {
         }
         if (reasoningEffort != null && !reasoningEffort.isEmpty()) {
             config.put("reasoningEffort", reasoningEffort);
+        }
+        if (contextWindow != null && contextWindow > 0) {
+            config.put("contextWindow", contextWindow.longValue());
+        }
+        if (compactionPercent != null && compactionPercent > 0 && compactionPercent <= 100) {
+            config.put("compactionPercent", compactionPercent);
         }
         atomicWriteString(agentConfigFile(), config.toString());
     }
@@ -881,6 +887,8 @@ public class CraftStore {
         String model = config.optString("model", "");
         out.put("model", model.isEmpty() ? DEFAULT_AGENT_MODEL : model);
         out.put("reasoningEffort", config.optString("reasoningEffort", "high"));
+        out.put("contextWindow", config.optLong("contextWindow", 0L));
+        out.put("compactionPercent", config.optDouble("compactionPercent", 0d));
         return out;
     }
 

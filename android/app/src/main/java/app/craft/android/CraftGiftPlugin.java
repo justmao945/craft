@@ -338,8 +338,10 @@ public class CraftGiftPlugin extends Plugin {
         String baseUrl = call.getString("baseUrl");
         String model = call.getString("model");
         String reasoningEffort = call.getString("reasoningEffort");
+        Integer contextWindow = call.getInt("contextWindow");
+        Double compactionPercent = call.getDouble("compactionPercent");
         try {
-            store.setAgentConfig(apiKey, baseUrl, model, reasoningEffort);
+            store.setAgentConfig(apiKey, baseUrl, model, reasoningEffort, contextWindow == null ? null : contextWindow.longValue(), compactionPercent);
             call.resolve(new JSObject().put("ok", true));
         } catch (Exception e) {
             call.reject("Could not save agent config: " + e.getMessage(), e);
@@ -355,6 +357,8 @@ public class CraftGiftPlugin extends Plugin {
             ret.put("baseUrl", config.optString("baseUrl"));
             ret.put("model", config.optString("model"));
             ret.put("reasoningEffort", config.optString("reasoningEffort", "high"));
+            ret.put("contextWindow", config.optLong("contextWindow", 0L));
+            ret.put("compactionPercent", config.optDouble("compactionPercent", 0d));
             call.resolve(ret);
         } catch (Exception e) {
             call.reject("Could not read agent config: " + e.getMessage(), e);

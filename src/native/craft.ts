@@ -68,6 +68,16 @@ const defaultConfig: AgentConfig = {
   baseUrl: 'https://api.deepseek.com/chat/completions',
   model: 'deepseek-flash',
   reasoningEffort: 'high',
+  contextWindow: 1_000_000,
+  compactionPercent: 30,
+}
+
+function normalizeContextWindow(window: number | undefined): number {
+  return Number.isFinite(window) && window! > 0 ? Math.floor(window!) : 1_000_000
+}
+
+function normalizeCompactionPercent(percent: number | undefined): number {
+  return Number.isFinite(percent) && percent! > 0 && percent! <= 100 ? Math.floor(percent!) : 30
 }
 
 /** DeepSeek compatibility aliases: minimal->low, medium/xhigh->high. */
@@ -189,7 +199,12 @@ export const giftStore = {
 
   async getAgentConfig(): Promise<AgentConfig> {
     const config = await giftPlugin.getAgentConfig()
-    return { ...defaultConfig, ...config, reasoningEffort: normalizeEffort(config.reasoningEffort) }
+    return {
+      ...defaultConfig, ...config,
+      reasoningEffort: normalizeEffort(config.reasoningEffort),
+      contextWindow: normalizeContextWindow(config.contextWindow),
+      compactionPercent: normalizeCompactionPercent(config.compactionPercent),
+    }
   },
 
   async setAgentConfig(config: AgentConfig): Promise<void> {

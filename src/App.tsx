@@ -78,7 +78,7 @@ export default function App() {
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState('')
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [config, setConfig] = useState<AgentConfig>({ apiKey: '', baseUrl: '', model: '', reasoningEffort: 'high' })
+  const [config, setConfig] = useState<AgentConfig>({ apiKey: '', baseUrl: '', model: '', reasoningEffort: 'high', contextWindow: 1_000_000, compactionPercent: 30 })
   const [activeGiftId, setActiveGiftId] = useState<string>()
   const [creatingGift, setCreatingGift] = useState(false)
   const [conversationOpen, setConversationOpen] = useState(false)
@@ -683,6 +683,8 @@ export default function App() {
               <label>API Key<div className="field"><input type="password" autoComplete="off" placeholder="sk-…" value={config.apiKey} onChange={(event) => setConfig({ ...config, apiKey: event.target.value })} /></div></label>
               <label>{t('settings.baseUrl')}<div className="field"><input inputMode="url" placeholder="https://…/v1/chat/completions" value={config.baseUrl} onChange={(event) => setConfig({ ...config, baseUrl: event.target.value })} /></div></label>
               <label>{t('settings.model')}<div className="field"><input placeholder={t('settings.modelPlaceholder')} value={config.model} onChange={(event) => setConfig({ ...config, model: event.target.value })} /></div></label>
+              <label>{t('settings.contextWindow')}<div className="field"><input type="number" inputMode="numeric" min={8000} step={1000} placeholder="1000000" value={config.contextWindow ?? ''} onChange={(event) => { const raw = event.target.value; const parsed = Number(raw); setConfig({ ...config, contextWindow: raw === '' || !Number.isFinite(parsed) ? undefined : Math.floor(parsed) }) }} /></div></label>
+              <label>{t('settings.compactionPercent')}<div className="field"><input type="number" inputMode="numeric" min={5} max={95} step={5} placeholder="30" value={config.compactionPercent ?? ''} onChange={(event) => { const raw = event.target.value; const parsed = Number(raw); setConfig({ ...config, compactionPercent: raw === '' || !Number.isFinite(parsed) ? undefined : Math.floor(parsed) }) }} /></div></label>
             </div>
           </section>
           <section className="settings-group" aria-label={t('settings.generation')}>

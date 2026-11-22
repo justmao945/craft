@@ -33,6 +33,10 @@ export interface AgentConfig {
   baseUrl: string
   model: string
   reasoningEffort: 'none' | 'low' | 'high' | 'max'
+  /** Model context window in tokens; drives the usage-based compaction trigger (default 1M, DeepSeek Flash). */
+  contextWindow?: number
+  /** Compaction trigger as a percent of the context window (default 30). */
+  compactionPercent?: number
 }
 
 export interface CompileResult {
