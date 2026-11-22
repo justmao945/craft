@@ -4,8 +4,8 @@
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
     <item android:drawable="@color/boot_bg" />
     <item
-        android:width="64dp"
-        android:height="64dp"
-        android:drawable="@mipmap/ic_launcher"
+        android:width="54dp"
+        android:height="54dp"
+        android:drawable="@drawable/boot_mark"
         android:gravity="center" />
 </layer-list>
