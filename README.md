@@ -10,7 +10,7 @@ Craft 是一个 Android 端的「自生长」宿主应用：不产出独立 APK�
 - 每个作品只有一个项目会话；通用会话有独立固定工作目录，用于问答、草稿和普通文件
 - 通用会话的聊天记录、完整模型上下文、文件和未发送草稿均持久化，可在后续版本叠加记忆功能
 - 聊天式工作区、模板广场、Gift 列表（两段确认删除）与个人设置
-- 自研 AgentRuntime：响应 Schema 校验、15 个工具、32 轮预算 + 自动收尾（子 agent 8 轮）、发布需用户确认
+- 自研 AgentRuntime：响应 Schema 校验、15 个工具、循环无固定轮数上限（模型自然停 / 手动停止 / 请求失败）、发布需用户确认
 - 一个 Gift 绑定一个主 agent，可 `delegate_task` 委派独立上下文的子 agent
 - `edit_file` 精确字符串替换（多处匹配需 `replace_all`）、`read_file` 按 `offset/limit` 行分片
 - 完整模型上下文 JSONL 持久化 + snapcompact 式图片压缩（见下）
@@ -53,7 +53,7 @@ Documents/Craft/agent-config.json                 模型配置（apiKey 加密�
 - 切点绝不落在 tool 结果上，保持 tool_call/tool 配对
 - **恢复**（参考 omp overflow recovery）：请求报上下文超限错误、或 `finish_reason=length` 截断时，先强制本地压缩再重试一次；压缩无进展（无可归档内容）则保留原状
 - 压缩说明附**累计文件操作清单**（`(Read)`/`(Write)`/`(RW)` 标记，超 20 个折叠），模型可据此恢复工作状态
-- 主 agent 单轮预算 32 轮（子 agent 8 轮）；预算用尽时自动请求一次**不含工具的收尾总结**，而不是直接报错（参考 omp auto-continue）
+- 循环与 omp 对齐：主/子 agent 均无固定轮数上限，终止条件为模型自然停、用户点停止按钮或请求失败；每轮做相同的压缩检查与恢复
 - 冷启动从 `context.jsonl` 无损恢复；无该文件的旧会话退化为 user/assistant 文本回放
 
 ## Agent 工具（15 个）

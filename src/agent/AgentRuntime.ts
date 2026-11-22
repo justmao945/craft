@@ -35,6 +35,8 @@ const AssistantResponseSchema = z.object({
 const ModelErrorSchema = z.object({ error: z.object({ message: z.string() }) })
 const ToolArgumentsSchema = z.record(z.string(), z.unknown())
 
+const STOP_MESSAGE = 'Craft was stopped by the user'
+
 /** Per-runLoop provider telemetry: the live prompt usage drives the compaction trigger. */
 interface UsageState {
   promptTokens: number
@@ -158,9 +160,15 @@ export class AgentRuntime {
   private currentGiftName = ''
   private lastBuild: { giftId: string; artifact: BuildArtifact } | undefined
   private running = false
+  private abortRequested = false
   /** Cumulative file operations for the omp-style <files> section in compaction notes. */
   private readonly filesRead = new Set<string>()
   private readonly filesModified = new Set<string>()
+
+  /** omp-style user abort: stop the active run (nested subagents included) at the next round boundary. */
+  abort(): void {
+    this.abortRequested = true
+  }
 
   constructor(private readonly hooks: AgentHooks, gift?: Gift, private readonly mode: 'gift' | 'general' = 'gift') {
     if (mode === 'general') this.messages[0] = { role: 'system', content: generalSystemPrompt }
@@ -199,12 +207,11 @@ export class AgentRuntime {
     const config = await giftStore.getAgentConfig()
     if (!config.apiKey) throw new Error('Add a model API key in Craft settings first')
     this.running = true
+    this.abortRequested = false
     this.messages.push({ role: 'user', content: prompt })
     try {
       const activeTools = this.currentGiftId ? projectTools : this.mode === 'general' ? generalTools : unboundTools
-      // omp runs its loop without a fixed cap (bounded by compaction and the user's abort);
-      // Craft keeps a hard guard against runaway spend but sizes it for large multi-file tasks.
-      const text = await this.runLoop(config, this.messages, activeTools, 32)
+      const text = await this.runLoop(config, this.messages, activeTools)
       this.hooks.onAssistant(text)
     } finally {
       this.running = false
@@ -212,8 +219,12 @@ export class AgentRuntime {
     }
   }
 
-  /** Shared main/subagent loop: model rounds, tool execution and deferred screenshot attachment. */
-  private async runLoop(config: AgentConfig, messages: ModelMessage[], activeTools: typeof tools, maxRounds: number, statusPrefix = ''): Promise<string> {
+  /**
+   * Shared main/subagent loop, omp-aligned: no fixed round cap. A turn ends when the model
+   * stops calling tools, the user aborts, or a request fails permanently; context pressure
+   * is handled by the per-round compaction, not by a budget.
+   */
+  private async runLoop(config: AgentConfig, messages: ModelMessage[], activeTools: typeof tools, statusPrefix = ''): Promise<string> {
     const usage: UsageState = { promptTokens: 0 }
     const contextWindow = config.contextWindow && config.contextWindow > 0 ? config.contextWindow : DEFAULT_CONTEXT_WINDOW_TOKENS
     const percent = config.compactionPercent && config.compactionPercent > 0 && config.compactionPercent <= 100
@@ -222,9 +233,12 @@ export class AgentRuntime {
     const triggerTokens = Math.floor(contextWindow * percent / 100)
     let pendingScreenshot: string | undefined
     let screenshotMessage: ModelMessage | undefined
-    for (let round = 0; round < maxRounds; round++) {
+    let round = 0
+    for (;;) {
+      if (this.abortRequested) throw new Error(STOP_MESSAGE)
       await this.compactIfNeeded(messages, usage, triggerTokens)
       this.hooks.onStatus(`${statusPrefix}${AGENT_ROUND_STATUS_PREFIX}${round + 1}: reasoning`)
+      round += 1
       const assistant = await this.requestWithRecovery(config, messages, activeTools, usage, triggerTokens)
       if (screenshotMessage) {
         // Only the newest screenshot stays in context; drop the previous one (if not archived already).
@@ -266,18 +280,6 @@ export class AgentRuntime {
         screenshotMessage = message
         pendingScreenshot = undefined
       }
-    }
-    // omp-style auto-continue: at the round budget, return one wrap-up summary instead of a hard error.
-    this.hooks.onStatus(`${statusPrefix}${AGENT_ROUND_STATUS_PREFIX}${maxRounds}: wrap-up`)
-    messages.push({
-      role: 'user',
-      content: `You reached the ${maxRounds}-round budget for this turn. Make no further tool calls; reply with a concise summary of what changed and what remains.`,
-    })
-    try {
-      const wrapUp = await this.requestAssistant(config, messages, [], usage)
-      return wrapUp.content ?? 'Done'
-    } catch {
-      throw new Error(`Agent reached the ${maxRounds}-round safety limit`)
     }
   }
 
@@ -355,23 +357,36 @@ export class AgentRuntime {
       { role: 'system', content: `${subagentPrompt}\nCurrent Gift: "${this.currentGiftName}" (id: ${this.currentGiftId}).` },
       { role: 'user', content: task },
     ]
-    const report = await this.runLoop(config, messages, subagentTools, 8, SUBAGENT_STATUS_PREFIX)
+    const report = await this.runLoop(config, messages, subagentTools, SUBAGENT_STATUS_PREFIX)
     return { ok: true, report }
   }
 
   private async requestAssistant(config: AgentConfig, messages: ModelMessage[], activeTools: typeof tools, usage: UsageState): Promise<AssistantMessage> {
     const { baseUrl, apiKey, model, reasoningEffort } = config
     if (!baseUrl.startsWith('https://')) throw new Error('Model endpoint must use HTTPS')
+    if (this.abortRequested) throw new Error(STOP_MESSAGE)
     const body = {
       model, messages, reasoning_effort: reasoningEffort,
       ...(activeTools.length ? { tools: activeTools, tool_choice: 'auto' } : {}),
     }
     // CapacitorHttp bypasses WebView CORS and keeps all traffic on the native stack.
-    const response = await CapacitorHttp.post({
+    // It has no AbortSignal, so a stop detaches from the request instead of cancelling
+    // the native call (omp cancels outright): the loop returns immediately, the stray
+    // response is discarded when it eventually settles.
+    const httpPromise = CapacitorHttp.post({
       url: baseUrl,
       headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
       data: body,
     })
+    const { promise: stopPromise, reject: rejectStop } = Promise.withResolvers<never>()
+    const timer = setInterval(() => {
+      if (this.abortRequested) {
+        clearInterval(timer)
+        rejectStop(new Error(STOP_MESSAGE))
+      }
+    }, 200)
+    httpPromise.then(() => clearInterval(timer), () => clearInterval(timer))
+    const response = await Promise.race([httpPromise, stopPromise])
     const status = response.status
     const payload: unknown = response.data
     if (status < 200 || status >= 300) {

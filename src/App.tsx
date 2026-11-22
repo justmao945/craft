@@ -4,7 +4,7 @@ import {
   ArrowLeft, ArrowUp, BarChart3, Blocks, BookOpen, CalendarCheck2, Check, ChevronRight, CircleUserRound,
   Clock3, Compass, FolderGit2, GlassWater, Languages, LayoutGrid, Lightbulb,
   LoaderCircle, Map, MessageCircle, MoreHorizontal, NotebookPen, Pin, Play, Plus, Rocket, Search,
-  ShieldCheck, Sparkles, Timer, Trash2, X,
+  ShieldCheck, Sparkles, Square, Timer, Trash2, X,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { AgentRuntime, AGENT_ROUND_STATUS_PREFIX, SUBAGENT_STATUS_PREFIX } from './agent/AgentRuntime'
@@ -91,6 +91,7 @@ export default function App() {
   const [deleteCandidate, setDeleteCandidate] = useState<string>()
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const composerRef = useRef<HTMLTextAreaElement>(null)
+  const runningAgentRef = useRef<AgentRuntime | undefined>(undefined)
   const sessionRef = useRef<SessionState>({ drafts: {} })
   const sessionReady = useRef(false)
   // Keep refs in lockstep with state: agent hooks and persistence run outside render.
@@ -366,13 +367,20 @@ export default function App() {
       const agent = activeGift
         ? await getAgent(activeGift)
         : await getAgent(undefined, creatingGift ? 'gift' : 'general')
+      runningAgentRef.current = agent
       await agent.run(prompt)
     } catch (error) {
       addMessage('assistant', error instanceof Error ? error.message : String(error))
     } finally {
+      runningAgentRef.current = undefined
       setBusy(false)
       setStatus('')
     }
+  }
+
+  /** Stops the running agent loop; the run surfaces a stopped message instead of more rounds. */
+  const stopAgent = () => {
+    runningAgentRef.current?.abort()
   }
 
   const saveSettings = async (event: FormEvent) => {
@@ -581,9 +589,9 @@ export default function App() {
               }
             }}
             placeholder={composerPlaceholder} />
-          <button className="send-button" aria-label={t('composer.send')} disabled={busy || !input.trim()} type="submit">
-            {busy ? <LoaderCircle className="spin" size={19} /> : <ArrowUp size={20} />}
-          </button>
+          {busy
+            ? <button className="send-button stop" aria-label={t('chat.stop')} type="button" onClick={stopAgent}><Square size={17} /></button>
+            : <button className="send-button" aria-label={t('composer.send')} disabled={!input.trim()} type="submit"><ArrowUp size={20} /></button>}
         </form>
       </div>
     </main>}
