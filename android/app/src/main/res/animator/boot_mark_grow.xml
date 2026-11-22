@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Icon grows in while the system splash is up; ends exactly at the vector's
+     static scale so the last animation frame matches every later phase. -->
+<set xmlns:android="http://schemas.android.com/apk/res/android"
+    android:interpolator="@android:interpolator/decelerate_quad">
+    <objectAnimator
+        android:duration="600"
+        android:propertyName="scaleX"
+        android:valueFrom="0.0"
+        android:valueTo="0.35"
+        android:valueType="floatType" />
+    <objectAnimator
+        android:duration="600"
+        android:propertyName="scaleY"
+        android:valueFrom="0.0"
+        android:valueTo="0.35"
+        android:valueType="floatType" />
+</set>
