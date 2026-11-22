@@ -46,8 +46,8 @@ export interface ChatMessage {
 /** App-level UI session: what to restore on cold start. */
 export interface SessionState {
   activeGiftId?: string
-  activeTab?: 'chat' | 'discover' | 'gifts' | 'profile'
+  activeTab?: 'craft' | 'gifts' | 'discover' | 'profile'
   language?: 'zh' | 'en'
-  /** Unsent composer text, keyed by gift id ('' = unbound new-gift composer). */
+  /** Unsent composer text, keyed by Gift id ('' = new Gift, '__general__' = general conversation). */
   drafts: Record<string, string>
 }

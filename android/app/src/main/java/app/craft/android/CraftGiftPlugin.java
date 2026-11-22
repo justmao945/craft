@@ -143,6 +143,45 @@ public class CraftGiftPlugin extends Plugin {
         }
     }
 
+    @PluginMethod
+    public void listGeneralFiles(PluginCall call) {
+        try {
+            JSArray files = new JSArray();
+            for (String path : store.listGeneralFiles()) files.put(path);
+            call.resolve(new JSObject().put("files", files));
+        } catch (Exception e) {
+            call.reject("Could not list general workspace files: " + e.getMessage(), e);
+        }
+    }
+
+    @PluginMethod
+    public void readGeneralFile(PluginCall call) {
+        String path = requiredString(call, "path", "path");
+        if (path == null) return;
+        try {
+            call.resolve(new JSObject().put("content", store.readGeneralFile(path)));
+        } catch (Exception e) {
+            call.reject("Could not read general workspace file: " + e.getMessage(), e);
+        }
+    }
+
+    @PluginMethod
+    public void writeGeneralFile(PluginCall call) {
+        String path = requiredString(call, "path", "path");
+        String content = call.getString("content");
+        if (path == null) return;
+        if (content == null) {
+            call.reject("content is required");
+            return;
+        }
+        try {
+            store.writeGeneralFile(path, content);
+            call.resolve(new JSObject().put("ok", true));
+        } catch (Exception e) {
+            call.reject("Could not write general workspace file: " + e.getMessage(), e);
+        }
+    }
+
     // ------------------------------------------------------------- snapshots
 
     @PluginMethod
@@ -340,6 +379,30 @@ public class CraftGiftPlugin extends Plugin {
     }
 
     @PluginMethod
+    public void getGeneralConversation(PluginCall call) {
+        try {
+            call.resolve(new JSObject().put("json", store.readGeneralConversation()));
+        } catch (Exception e) {
+            call.reject("Could not read general conversation: " + e.getMessage(), e);
+        }
+    }
+
+    @PluginMethod
+    public void saveGeneralConversation(PluginCall call) {
+        String json = call.getString("json");
+        if (json == null) {
+            call.reject("json is required");
+            return;
+        }
+        try {
+            store.writeGeneralConversation(json);
+            call.resolve(new JSObject().put("ok", true));
+        } catch (Exception e) {
+            call.reject("Could not save general conversation: " + e.getMessage(), e);
+        }
+    }
+
+    @PluginMethod
     public void getModelContext(PluginCall call) {
         String giftId = requiredString(call, "giftId", "giftId");
         if (giftId == null) return;
@@ -393,6 +456,54 @@ public class CraftGiftPlugin extends Plugin {
             call.resolve(new JSObject().put("jsonl", store.readContextArchive(giftId, file)));
         } catch (Exception e) {
             call.reject("Could not read context archive: " + e.getMessage(), e);
+        }
+    }
+
+    @PluginMethod
+    public void getGeneralModelContext(PluginCall call) {
+        try {
+            call.resolve(new JSObject().put("jsonl", store.readGeneralModelContext()));
+        } catch (Exception e) {
+            call.reject("Could not read general model context: " + e.getMessage(), e);
+        }
+    }
+
+    @PluginMethod
+    public void saveGeneralModelContext(PluginCall call) {
+        try {
+            store.writeGeneralModelContext(call.getString("jsonl"));
+            call.resolve(new JSObject().put("ok", true));
+        } catch (Exception e) {
+            call.reject("Could not save general model context: " + e.getMessage(), e);
+        }
+    }
+
+    @PluginMethod
+    public void archiveGeneralModelContext(PluginCall call) {
+        try {
+            call.resolve(new JSObject().put("file", store.archiveGeneralModelContext(call.getString("jsonl"))));
+        } catch (Exception e) {
+            call.reject("Could not archive general model context: " + e.getMessage(), e);
+        }
+    }
+
+    @PluginMethod
+    public void listGeneralContextArchives(PluginCall call) {
+        try {
+            call.resolve(new JSObject().put("files", new JSONArray(store.listGeneralContextArchives())));
+        } catch (Exception e) {
+            call.reject("Could not list general context archives: " + e.getMessage(), e);
+        }
+    }
+
+    @PluginMethod
+    public void readGeneralContextArchive(PluginCall call) {
+        String file = requiredString(call, "file", "file");
+        if (file == null) return;
+        try {
+            call.resolve(new JSObject().put("jsonl", store.readGeneralContextArchive(file)));
+        } catch (Exception e) {
+            call.reject("Could not read general context archive: " + e.getMessage(), e);
         }
     }
 

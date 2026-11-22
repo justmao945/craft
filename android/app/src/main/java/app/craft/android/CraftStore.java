@@ -35,9 +35,12 @@ import java.util.UUID;
  *   <filesDir>/craft/<giftId>/builds/<id>/{app.js,app.css}  immutable builds
  *   <filesDir>/craft/<giftId>/draft.json               { buildId }
  *   <filesDir>/craft/<giftId>/release.json             { buildId }
- *   <filesDir>/craft/<giftId>/conversation.json        single project-scoped chat history
+ *   <filesDir>/craft/<giftId>/conversation.json        single Gift-scoped conversation history
  *   <filesDir>/craft/<giftId>/context.jsonl            full model transcript (JSONL, lossless)
  *   <filesDir>/craft/<giftId>/context-archive-<ts>.jsonl  pre-compaction raw transcripts
+ *   <filesDir>/craft/.general/workspace/**             persistent general drafts and files
+ *   <filesDir>/craft/.general/conversation.json        general conversation history
+ *   <filesDir>/craft/.general/context.jsonl            general full model transcript
  *   <filesDir>/craft/session.json                     UI session: last project/tab, composer drafts
  *   <filesDir>/craft/agent-config.json                { apiKey(encrypted), baseUrl, model, reasoningEffort }
  */
@@ -48,6 +51,8 @@ public class CraftStore {
 
     private static final String REGISTRY_FILE = "gifts.json";
     private static final String WORKSPACE_DIR = "workspace";
+    /** Persistent general conversation; deliberately outside the Gift registry and id namespace. */
+    private static final String GENERAL_DIR = ".general";
     /** Git internals inside the workspace; never exposed through file traversal. */
     private static final String GIT_DIR = ".git";
     private static final String SNAPSHOTS_DIR = "snapshots";
@@ -289,32 +294,62 @@ public class CraftStore {
     /** Sorted relative workspace paths. */
     public List<String> listWorkspaceFiles(String giftId) throws IOException {
         requireGift(giftId);
+        return listFilesIn(workspaceDir(giftId));
+    }
+
+    public String readFile(String giftId, String path) throws IOException {
+        requireGift(giftId);
+        return readFileIn(workspaceDir(giftId), path);
+    }
+
+    /** Atomic write (temp file + rename) of a single workspace file. Path traversal is rejected. */
+    public void writeFile(String giftId, String path, String content) throws IOException {
+        requireGift(giftId);
+        writeFileIn(workspaceDir(giftId), path, content);
+    }
+
+    public List<String> listGeneralFiles() throws IOException {
+        return listFilesIn(generalWorkspaceDir());
+    }
+
+    public String readGeneralFile(String path) throws IOException {
+        return readFileIn(generalWorkspaceDir(), path);
+    }
+
+    public void writeGeneralFile(String path, String content) throws IOException {
+        writeFileIn(generalWorkspaceDir(), path, content);
+    }
+
+    private List<String> listFilesIn(File workspace) {
         List<String> out = new ArrayList<>();
-        File workspace = workspaceDir(giftId);
         collectPaths(workspace, "", out);
         String[] arr = out.toArray(new String[0]);
         Arrays.sort(arr);
         return Arrays.asList(arr);
     }
 
-    public String readFile(String giftId, String path) throws IOException {
-        requireGift(giftId);
-        File file = resolveWorkspaceFile(giftId, path);
+    private String readFileIn(File workspace, String path) throws IOException {
+        File file = resolveWorkspaceFile(workspace, path);
         if (!file.isFile()) {
             throw new IOException("File not found: " + path);
         }
         return readString(file);
     }
 
-    /** Atomic write (temp file + rename) of a single workspace file. Path traversal is rejected. */
-    public void writeFile(String giftId, String path, String content) throws IOException {
-        requireGift(giftId);
-        File file = resolveWorkspaceFile(giftId, path);
-        atomicWriteString(file, content == null ? "" : content);
+    private void writeFileIn(File workspace, String path, String content) throws IOException {
+        atomicWriteString(resolveWorkspaceFile(workspace, path), content == null ? "" : content);
     }
 
     private File workspaceDir(String giftId) {
         return new File(giftDir(giftId), WORKSPACE_DIR);
+    }
+
+    private File generalDir() {
+        return new File(rootDir, GENERAL_DIR);
+    }
+
+    private File generalWorkspaceDir() {
+        return new File(generalDir(), WORKSPACE_DIR);
     }
 
     /** Opens the git repository embedded in the gift's workspace, initializing it on first use. */
@@ -336,43 +371,88 @@ public class CraftStore {
     /** One conversation per gift; stored outside the workspace so it never ships with gift source. */
     public synchronized String readConversation(String giftId) throws IOException {
         requireGift(giftId);
-        File file = new File(giftDir(giftId), CONVERSATION_FILE);
-        if (!file.isFile()) {
-            return "[]";
-        }
-        return readString(file);
+        return readConversationIn(giftDir(giftId));
     }
 
     public synchronized void writeConversation(String giftId, String json) throws IOException, JSONException {
         requireGift(giftId);
+        writeConversationIn(giftDir(giftId), json);
+    }
+
+    public synchronized String readGeneralConversation() throws IOException {
+        return readConversationIn(generalDir());
+    }
+
+    public synchronized void writeGeneralConversation(String json) throws IOException, JSONException {
+        writeConversationIn(generalDir(), json);
+    }
+
+    private String readConversationIn(File dir) throws IOException {
+        File file = new File(dir, CONVERSATION_FILE);
+        return file.isFile() ? readString(file) : "[]";
+    }
+
+    private void writeConversationIn(File dir, String json) throws IOException, JSONException {
         new JSONArray(json); // reject malformed payloads before they corrupt the saved history
-        atomicWriteString(new File(giftDir(giftId), CONVERSATION_FILE), json);
+        atomicWriteString(new File(dir, CONVERSATION_FILE), json);
     }
 
     /** Lossless model transcript; unlike conversation.json this keeps tool calls and reasoning. */
     public synchronized String readModelContext(String giftId) throws IOException {
         requireGift(giftId);
-        File file = new File(giftDir(giftId), CONTEXT_FILE);
-        return file.isFile() ? readString(file) : "";
+        return readModelContextIn(giftDir(giftId));
     }
 
     public synchronized void writeModelContext(String giftId, String jsonl) throws IOException {
         requireGift(giftId);
-        atomicWriteString(new File(giftDir(giftId), CONTEXT_FILE), jsonl == null ? "" : jsonl);
+        writeModelContextIn(giftDir(giftId), jsonl);
+    }
+
+    public synchronized String readGeneralModelContext() throws IOException {
+        return readModelContextIn(generalDir());
+    }
+
+    public synchronized void writeGeneralModelContext(String jsonl) throws IOException {
+        writeModelContextIn(generalDir(), jsonl);
+    }
+
+    private String readModelContextIn(File dir) throws IOException {
+        File file = new File(dir, CONTEXT_FILE);
+        return file.isFile() ? readString(file) : "";
+    }
+
+    private void writeModelContextIn(File dir, String jsonl) throws IOException {
+        atomicWriteString(new File(dir, CONTEXT_FILE), jsonl == null ? "" : jsonl);
     }
 
     /** Each compaction archives the dropped raw messages as a NEW timestamped file. */
     public synchronized String archiveModelContext(String giftId, String jsonl) throws IOException {
         requireGift(giftId);
-        File file = new File(giftDir(giftId), "context-archive-" + System.currentTimeMillis() + ".jsonl");
+        return archiveModelContextIn(giftDir(giftId), jsonl);
+    }
+
+    public synchronized String archiveGeneralModelContext(String jsonl) throws IOException {
+        return archiveModelContextIn(generalDir(), jsonl);
+    }
+
+    private String archiveModelContextIn(File dir, String jsonl) throws IOException {
+        File file = new File(dir, "context-archive-" + System.currentTimeMillis() + ".jsonl");
         atomicWriteString(file, jsonl == null ? "" : jsonl);
         return file.getName();
     }
 
     public synchronized List<String> listContextArchives(String giftId) throws IOException {
         requireGift(giftId);
+        return listContextArchivesIn(giftDir(giftId));
+    }
+
+    public synchronized List<String> listGeneralContextArchives() throws IOException {
+        return listContextArchivesIn(generalDir());
+    }
+
+    private List<String> listContextArchivesIn(File dir) {
         List<String> out = new ArrayList<>();
-        File[] kids = giftDir(giftId).listFiles();
+        File[] kids = dir.listFiles();
         if (kids != null) {
             for (File kid : kids) {
                 if (kid.isFile() && kid.getName().matches(ARCHIVE_FILE_PATTERN)) {
@@ -386,10 +466,18 @@ public class CraftStore {
 
     public synchronized String readContextArchive(String giftId, String name) throws IOException {
         requireGift(giftId);
+        return readContextArchiveIn(giftDir(giftId), name);
+    }
+
+    public synchronized String readGeneralContextArchive(String name) throws IOException {
+        return readContextArchiveIn(generalDir(), name);
+    }
+
+    private String readContextArchiveIn(File dir, String name) throws IOException {
         if (name == null || !name.matches(ARCHIVE_FILE_PATTERN)) {
             throw new IllegalArgumentException("Invalid archive file name");
         }
-        File file = new File(giftDir(giftId), name);
+        File file = new File(dir, name);
         if (!file.isFile()) {
             throw new IOException("Archive not found: " + name);
         }
@@ -433,7 +521,7 @@ public class CraftStore {
         return new File(rootDir, giftId);
     }
 
-    private File resolveWorkspaceFile(String giftId, String relPath) throws IOException {
+    private File resolveWorkspaceFile(File workspace, String relPath) throws IOException {
         if (relPath == null || relPath.trim().isEmpty()) {
             throw new IllegalArgumentException("Path must not be empty");
         }
@@ -443,12 +531,11 @@ public class CraftStore {
         if (relPath.startsWith("/") || relPath.indexOf('\\') >= 0) {
             throw new IllegalArgumentException("Invalid path: " + relPath);
         }
-        File workspace = workspaceDir(giftId);
         File target = new File(workspace, relPath);
         String canonical = target.getCanonicalPath();
         String base = workspace.getCanonicalPath() + File.separator;
         if (!canonical.equals(workspace.getCanonicalPath()) && !canonical.startsWith(base)) {
-            throw new IllegalArgumentException("Path escapes the gift workspace: " + relPath);
+            throw new IllegalArgumentException("Path escapes the selected workspace: " + relPath);
         }
         return target;
     }

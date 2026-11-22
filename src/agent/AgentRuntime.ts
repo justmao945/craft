@@ -1,7 +1,7 @@
 import { CapacitorHttp } from '@capacitor/core'
 import { z } from 'zod'
 import { compileProject } from '../compiler/compiler'
-import { giftStore, runtime } from '../native/craft'
+import { generalStore, giftStore, runtime } from '../native/craft'
 import type { AgentConfig, Gift, BuildArtifact, ChatMessage } from '../types'
 import type { AssistantMessage, ContentPart, ModelMessage } from './context'
 import {
@@ -64,9 +64,9 @@ interface AgentHooks {
   onArchive?: (jsonl: string) => Promise<void>
 }
 
-const systemPrompt = `You are Craft, a self-developed mobile coding agent running on Android.
+const giftSystemPrompt = `You are Craft, a self-developed mobile coding agent running on Android.
 Craft is a host app made of Gifts: self-contained feature modules (tools, utilities, games) living inside Craft, never standalone APKs.
-Each conversation belongs to exactly one Gift. If none is bound yet, call create_gift once with a short name derived from the user's request; the conversation then stays bound to that Gift. Never create additional Gifts in a bound conversation.
+Each Gift conversation belongs to exactly one Gift. If none is bound yet, call create_gift once with a short name derived from the user's request; the conversation then stays bound to that Gift. Never create additional Gifts in a bound conversation.
 Use tools to create and modify real modules. Never substitute printed code for tool execution.
 The module entry is src/main.tsx. Available imports: react, react-dom/client, react/jsx-runtime, @craft/sdk.
 Every module must mount with createRoot(document.getElementById('root')!).render(<App />).
@@ -79,6 +79,12 @@ For a focused independent subtask (a self-contained module, or an isolated build
 Do not publish until the build and main-flow test succeed. Publishing commits the workspace to the Gift's git repository and requires user confirmation.
 Keep responses concise and in the user's language.`
 
+const generalSystemPrompt = `You are Craft, a helpful general AI assistant in one persistent general conversation.
+Answer questions, brainstorm, explain, write and reason normally. Keep responses concise and in the user's language.
+This conversation has a fixed private workspace for drafts, notes and other files, independent from every Gift. Use list_files, read_file, write_file and edit_file when file work is useful; paths are relative to that workspace. Never access or claim access to a Gift workspace from this mode.
+The conversation, full model context and general workspace files persist across app restarts. Compacted history can be recovered with list_context_archives and read_context_archive.
+You have no Gift creation, build, preview or publish tools in this mode. If the user asks to create or modify a software module, explain that they can choose "New Gift" from the Craft workspace selector.`
+
 const subagentPrompt = `You are a Craft subagent. The main agent delegated a focused subtask in the current Gift (a feature module inside Craft).
 Work autonomously with the file, build and preview tools. You cannot publish, create Gifts or delegate further.
 The module entry is src/main.tsx. Available imports: react, react-dom/client, react/jsx-runtime, @craft/sdk.
@@ -90,10 +96,10 @@ Finish with a concise report for the main agent: files changed, build/test evide
 
 const toolDefinitions = [
   { name: 'create_gift', description: 'Create the Gift (feature module) for this conversation. Only available before a Gift is bound.', parameters: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] } },
-  { name: 'list_files', description: 'List source files in the current Gift', parameters: { type: 'object', properties: {} } },
-  { name: 'read_file', description: 'Read a source file. Use offset/limit (1-based line numbers) to page through large files.', parameters: { type: 'object', properties: { path: { type: 'string' }, offset: { type: 'integer', minimum: 1 }, limit: { type: 'integer', minimum: 1 } }, required: ['path'] } },
-  { name: 'write_file', description: 'Create or completely replace a source file', parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'] } },
-  { name: 'edit_file', description: 'Replace an exact string in a source file. old_string must match exactly once unless replace_all is true. Prefer this over write_file for targeted changes.', parameters: { type: 'object', properties: { path: { type: 'string' }, old_string: { type: 'string' }, new_string: { type: 'string' }, replace_all: { type: 'boolean' } }, required: ['path', 'old_string', 'new_string'] } },
+  { name: 'list_files', description: 'List files in the current workspace', parameters: { type: 'object', properties: {} } },
+  { name: 'read_file', description: 'Read a workspace file. Use offset/limit (1-based line numbers) to page through large files.', parameters: { type: 'object', properties: { path: { type: 'string' }, offset: { type: 'integer', minimum: 1 }, limit: { type: 'integer', minimum: 1 } }, required: ['path'] } },
+  { name: 'write_file', description: 'Create or completely replace a workspace file', parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'] } },
+  { name: 'edit_file', description: 'Replace an exact string in a workspace file. old_string must match exactly once unless replace_all is true. Prefer this over write_file for targeted changes.', parameters: { type: 'object', properties: { path: { type: 'string' }, old_string: { type: 'string' }, new_string: { type: 'string' }, replace_all: { type: 'boolean' } }, required: ['path', 'old_string', 'new_string'] } },
   { name: 'build_gift', description: 'Compile the multi-file TSX project, save a draft and open its real preview', parameters: { type: 'object', properties: {} } },
   { name: 'inspect_preview', description: 'Read the rendered app semantic UI tree', parameters: { type: 'object', properties: {} } },
   { name: 'screenshot_preview', description: 'Capture the actual native preview screen for visual inspection', parameters: { type: 'object', properties: {} } },
@@ -117,6 +123,8 @@ function toolsNamed(names: readonly string[]) {
 }
 
 const unboundTools = toolsNamed(['create_gift'])
+const GENERAL_TOOL_NAMES = ['list_files', 'read_file', 'write_file', 'edit_file', ...ARCHIVE_TOOL_NAMES]
+const generalTools = toolsNamed(GENERAL_TOOL_NAMES)
 const projectTools = toolsNamed(PROJECT_TOOL_NAMES)
 const subagentTools = toolsNamed(SUBAGENT_TOOL_NAMES)
 
@@ -125,19 +133,20 @@ const CONTEXT_CHAR_LIMIT = 60_000
 const RECENT_CHAR_LIMIT = 20_000
 
 export class AgentRuntime {
-  private messages: ModelMessage[] = [{ role: 'system', content: systemPrompt }]
+  private messages: ModelMessage[] = [{ role: 'system', content: giftSystemPrompt }]
   private currentGiftId: string | undefined
   private currentGiftName = ''
   private lastBuild: { giftId: string; artifact: BuildArtifact } | undefined
   private running = false
 
-  constructor(private readonly hooks: AgentHooks, gift?: Gift) {
+  constructor(private readonly hooks: AgentHooks, gift?: Gift, private readonly mode: 'gift' | 'general' = 'gift') {
+    if (mode === 'general') this.messages[0] = { role: 'system', content: generalSystemPrompt }
     if (gift) {
       this.currentGiftId = gift.id
       this.currentGiftName = gift.name
       this.messages[0] = {
         role: 'system',
-        content: `${systemPrompt}\nThis conversation is bound to Gift "${gift.name}" (id: ${gift.id}). Work only on this Gift.`,
+        content: `${giftSystemPrompt}\nThis conversation is bound to Gift "${gift.name}" (id: ${gift.id}). Work only on this Gift.`,
       }
     }
   }
@@ -169,7 +178,8 @@ export class AgentRuntime {
     this.running = true
     this.messages.push({ role: 'user', content: prompt })
     try {
-      const text = await this.runLoop(config, this.messages, this.currentGiftId ? projectTools : unboundTools, 18)
+      const activeTools = this.currentGiftId ? projectTools : this.mode === 'general' ? generalTools : unboundTools
+      const text = await this.runLoop(config, this.messages, activeTools, 18)
       this.hooks.onAssistant(text)
     } finally {
       this.running = false
@@ -267,7 +277,10 @@ export class AgentRuntime {
   private async requestAssistant(config: AgentConfig, messages: ModelMessage[], activeTools: typeof tools): Promise<AssistantMessage> {
     const { baseUrl, apiKey, model, reasoningEffort } = config
     if (!baseUrl.startsWith('https://')) throw new Error('Model endpoint must use HTTPS')
-    const body = { model, messages, tools: activeTools, tool_choice: 'auto', reasoning_effort: reasoningEffort }
+    const body = {
+      model, messages, reasoning_effort: reasoningEffort,
+      ...(activeTools.length ? { tools: activeTools, tool_choice: 'auto' } : {}),
+    }
     // CapacitorHttp bypasses WebView CORS and keeps all traffic on the native stack.
     const response = await CapacitorHttp.post({
       url: baseUrl,
@@ -284,9 +297,12 @@ export class AgentRuntime {
   }
 
   private async executeTool(name: string, args: ToolArguments, config: AgentConfig): Promise<unknown> {
+    if (this.mode === 'general' && !GENERAL_TOOL_NAMES.includes(name)) {
+      throw new Error(`Tool is not available in the general conversation: ${name}`)
+    }
     switch (name) {
       case 'create_gift': {
-        if (this.currentGiftId) throw new Error('This conversation already belongs to a Gift')
+        if (this.mode !== 'gift' || this.currentGiftId) throw new Error('This conversation cannot create a Gift')
         const gift = await giftStore.createGift(stringArgument(args, 'name').trim())
         this.selectGift(gift)
         await giftStore.writeFile(gift.id, 'gift.json', JSON.stringify({
@@ -296,22 +312,25 @@ export class AgentRuntime {
         return { ok: true, gift }
       }
       case 'list_files':
-        return { files: await giftStore.listFiles(this.giftId()) }
+        return { files: this.mode === 'general' ? await generalStore.listFiles() : await giftStore.listFiles(this.giftId()) }
       case 'read_file': {
         const path = stringArgument(args, 'path')
-        const content = await giftStore.readFile(this.giftId(), path)
+        const content = this.mode === 'general' ? await generalStore.readFile(path) : await giftStore.readFile(this.giftId(), path)
         return { path, ...sliceFileLines(content, optionalNumber(args, 'offset'), optionalNumber(args, 'limit')) }
       }
       case 'write_file': {
         const path = stringArgument(args, 'path')
-        await giftStore.writeFile(this.giftId(), path, stringArgument(args, 'content', true))
+        const content = stringArgument(args, 'content', true)
+        if (this.mode === 'general') await generalStore.writeFile(path, content)
+        else await giftStore.writeFile(this.giftId(), path, content)
         return { ok: true, path }
       }
       case 'edit_file': {
         const path = stringArgument(args, 'path')
-        const current = await giftStore.readFile(this.giftId(), path)
+        const current = this.mode === 'general' ? await generalStore.readFile(path) : await giftStore.readFile(this.giftId(), path)
         const edit = applyFileEdit(current, stringArgument(args, 'old_string'), stringArgument(args, 'new_string', true), args.replace_all === true)
-        await giftStore.writeFile(this.giftId(), path, edit.content)
+        if (this.mode === 'general') await generalStore.writeFile(path, edit.content)
+        else await giftStore.writeFile(this.giftId(), path, edit.content)
         return { ok: true, path, replacements: edit.replacements }
       }
       case 'build_gift':
@@ -333,10 +352,10 @@ export class AgentRuntime {
       case 'preview_logs':
         return { logs: await runtime.logs() }
       case 'list_context_archives':
-        return { files: await giftStore.listContextArchives(this.giftId()) }
+        return { files: this.mode === 'general' ? await generalStore.listContextArchives() : await giftStore.listContextArchives(this.giftId()) }
       case 'read_context_archive': {
         const file = stringArgument(args, 'file')
-        const jsonl = await giftStore.readContextArchive(this.giftId(), file)
+        const jsonl = this.mode === 'general' ? await generalStore.readContextArchive(file) : await giftStore.readContextArchive(this.giftId(), file)
         return { file, ...sliceFileLines(jsonl, optionalNumber(args, 'offset'), optionalNumber(args, 'limit') ?? 40) }
       }
       case 'delegate_task':
@@ -365,7 +384,7 @@ export class AgentRuntime {
     this.currentGiftName = gift.name
     this.messages[0] = {
       role: 'system',
-      content: `${systemPrompt}\nThis conversation is bound to Gift "${gift.name}" (id: ${gift.id}). Work only on this Gift.`,
+      content: `${giftSystemPrompt}\nThis conversation is bound to Gift "${gift.name}" (id: ${gift.id}). Work only on this Gift.`,
     }
     this.hooks.onGiftSelected(gift)
   }

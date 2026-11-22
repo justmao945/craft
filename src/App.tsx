@@ -1,23 +1,25 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import {
-  ArrowLeft, ArrowUp, BarChart3, Blocks, BookOpen, CalendarCheck2, Check, ChevronRight, CircleUserRound,
+  ArrowLeft, ArrowUp, BarChart3, Blocks, BookOpen, CalendarCheck2, Check, ChevronDown, ChevronRight, CircleUserRound,
   Clock3, Compass, FlaskConical, FolderGit2, GlassWater, Languages, LayoutGrid, Lightbulb,
-  LoaderCircle, Map, MessageCircle, MessageSquare, NotebookPen, Plus, Rocket,
-  ShieldCheck, Sparkles, Timer, Trash2, X,
+  LoaderCircle, Map, MessageCircle, MessageSquarePlus, MoreHorizontal, NotebookPen, Play, Plus, Rocket,
+  Settings2, ShieldCheck, Sparkles, Timer, Trash2, X,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { AgentRuntime } from './agent/AgentRuntime'
-import { giftStore, runtime } from './native/craft'
+import { generalStore, giftStore, runtime } from './native/craft'
 import { createOfflineTodo } from './sample'
 import { detectLanguage, translate } from './i18n'
 import type { Language, MessageKey } from './i18n'
 import type { AgentConfig, ChatMessage, Gift, SessionState, Snapshot } from './types'
 import './styles.css'
 
-type Tab = 'chat' | 'discover' | 'gifts' | 'profile'
+type Tab = 'craft' | 'gifts' | 'discover' | 'profile'
+type AgentMode = 'gift' | 'general'
 
 const NEW_GIFT_KEY = '__new__'
+const GENERAL_SESSION_KEY = '__general__'
 const OFFLINE_STATUS = 'Building the offline Todo validation app'
 const COMPACT_STATUS = 'Compacting earlier context into archive pages'
 
@@ -35,33 +37,45 @@ const inspirations: readonly { id: InspirationId; icon: LucideIcon; tone: string
 
 const categories = ['all', 'productivity', 'life', 'finance', 'study'] as const
 
-const chatSuggestions = [
+type SuggestionKey = 'suggestion.ledger' | 'suggestion.habit' | 'suggestion.notes' | 'suggestion.think' | 'suggestion.explain' | 'suggestion.write'
+type Suggestion = { icon: LucideIcon; key: SuggestionKey; prompt: MessageKey }
+
+const giftSuggestions: readonly Suggestion[] = [
   { icon: BarChart3, key: 'suggestion.ledger', prompt: 'inspiration.ledger.prompt' },
   { icon: CalendarCheck2, key: 'suggestion.habit', prompt: 'inspiration.habit.prompt' },
   { icon: NotebookPen, key: 'suggestion.notes', prompt: 'suggestion.notes.prompt' },
+] as const
+
+const generalSuggestions: readonly Suggestion[] = [
+  { icon: Lightbulb, key: 'suggestion.think', prompt: 'suggestion.think.prompt' },
+  { icon: BookOpen, key: 'suggestion.explain', prompt: 'suggestion.explain.prompt' },
+  { icon: NotebookPen, key: 'suggestion.write', prompt: 'suggestion.write.prompt' },
 ] as const
 
 function CraftMark({ size = 'normal' }: { size?: 'small' | 'normal' | 'large' }) {
   return <span className={`craft-mark ${size}`}><Blocks strokeWidth={2.2} /></span>
 }
 
-function welcomeChat(language: Language): ChatMessage {
+function welcomeMessage(language: Language): ChatMessage {
   return { id: 'welcome', role: 'assistant', createdAt: Date.now(), text: translate(language, 'welcome.subtitle') }
 }
 
 export default function App() {
   const [gifts, setGifts] = useState<Gift[]>([])
-  const [activeTab, setActiveTab] = useState<Tab>('chat')
+  const [activeTab, setActiveTab] = useState<Tab>('craft')
   const [discoverCategory, setDiscoverCategory] = useState<(typeof categories)[number]>('all')
   const [notice, setNotice] = useState('')
   const [language, setLanguage] = useState<Language>(detectLanguage)
-  const [messages, setMessages] = useState<ChatMessage[]>(() => [welcomeChat(detectLanguage())])
+  const [messages, setMessages] = useState<ChatMessage[]>(() => [welcomeMessage(detectLanguage())])
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState('')
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [config, setConfig] = useState<AgentConfig>({ apiKey: '', baseUrl: '', model: '', reasoningEffort: 'high' })
   const [activeGiftId, setActiveGiftId] = useState<string>()
+  const [creatingGift, setCreatingGift] = useState(false)
+  const [workspaceOpen, setWorkspaceOpen] = useState(false)
+  const [toolsOpen, setToolsOpen] = useState(false)
   const [versions, setVersions] = useState<Snapshot[]>([])
   const [versionsOpen, setVersionsOpen] = useState(false)
   const [confirmation, setConfirmation] = useState<{ action: string; resolve: (approved: boolean) => void }>()
@@ -72,7 +86,9 @@ export default function App() {
   const sessionReady = useRef(false)
   // Keep refs in lockstep with state: agent hooks and persistence run outside render.
   const messagesRef = useRef<ChatMessage[]>(messages)
+  const generalMessagesRef = useRef<ChatMessage[]>(messages)
   const activeGiftIdRef = useRef<string | undefined>(undefined)
+  const creatingGiftRef = useRef(false)
   const agentsRef = useRef(new globalThis.Map<string, AgentRuntime>())
 
   const t = useCallback((key: MessageKey, vars: Record<string, string | number> = {}) => translate(language, key, vars), [language])
@@ -90,6 +106,10 @@ export default function App() {
     messagesRef.current = next
     setMessages(next)
     if (activeGiftIdRef.current) void giftStore.saveConversation(activeGiftIdRef.current, next)
+    else if (!creatingGiftRef.current) {
+      generalMessagesRef.current = next
+      void generalStore.saveConversation(next)
+    }
   }, [])
 
   const addMessage = useCallback((role: ChatMessage['role'], text: string) => {
@@ -112,7 +132,9 @@ export default function App() {
         agentsRef.current.set(gift.id, pending)
       }
       activeGiftIdRef.current = gift.id
+      creatingGiftRef.current = false
       setActiveGiftId(gift.id)
+      setCreatingGift(false)
       void giftStore.saveConversation(gift.id, messagesRef.current)
     },
     confirm: (action: string) => {
@@ -123,23 +145,29 @@ export default function App() {
     onContext: async (jsonl: string) => {
       const giftId = activeGiftIdRef.current
       if (giftId) await giftStore.saveModelContext(giftId, jsonl)
+      else if (!creatingGiftRef.current) await generalStore.saveModelContext(jsonl)
     },
     onArchive: async (jsonl: string) => {
       const giftId = activeGiftIdRef.current
       if (giftId) await giftStore.archiveModelContext(giftId, jsonl)
+      else if (!creatingGiftRef.current) await generalStore.archiveModelContext(jsonl)
     },
   }), [addMessage, refreshGifts])
 
-  // One agent per Gift; full JSONL context is restored losslessly on cold start.
-  const getAgent = useCallback(async (gift?: Gift): Promise<AgentRuntime> => {
-    const key = gift?.id ?? NEW_GIFT_KEY
+  // One persistent agent per Gift, one builder for a new Gift, and one persistent general agent.
+  const getAgent = useCallback(async (gift?: Gift, mode: AgentMode = 'gift'): Promise<AgentRuntime> => {
+    const key = gift?.id ?? (mode === 'general' ? GENERAL_SESSION_KEY : NEW_GIFT_KEY)
     let instance = agentsRef.current.get(key)
     if (!instance) {
-      instance = new AgentRuntime(agentHooks, gift)
+      instance = new AgentRuntime(agentHooks, gift, mode)
       if (gift) {
         const jsonl = await giftStore.getModelContext(gift.id)
         if (jsonl) instance.restoreContext(jsonl)
         else instance.seedHistory(messagesRef.current) // legacy conversations without context.jsonl
+      } else if (mode === 'general') {
+        const jsonl = await generalStore.getModelContext()
+        if (jsonl) instance.restoreContext(jsonl)
+        else instance.seedHistory(generalMessagesRef.current)
       }
       agentsRef.current.set(key, instance)
     }
@@ -149,33 +177,59 @@ export default function App() {
   const openGift = useCallback(async (gift: Gift) => {
     if (busy) return
     const history = await giftStore.getConversation(gift.id)
-    const next = history.length ? history : [welcomeChat(language)]
+    const next = history.length ? history : [welcomeMessage(language)]
     activeGiftIdRef.current = gift.id
+    creatingGiftRef.current = false
     setActiveGiftId(gift.id)
+    setCreatingGift(false)
     messagesRef.current = next
     setMessages(next)
     setInput(sessionRef.current.drafts[gift.id] ?? '')
+    setWorkspaceOpen(false)
+    setToolsOpen(false)
     await getAgent(gift)
-    setActiveTab('chat')
+    setActiveTab('craft')
+  }, [busy, getAgent, language])
+
+  const openGeneral = useCallback(async () => {
+    if (busy) return
+    const history = await generalStore.getConversation()
+    const next = history.length ? history : [welcomeMessage(language)]
+    activeGiftIdRef.current = undefined
+    creatingGiftRef.current = false
+    setActiveGiftId(undefined)
+    setCreatingGift(false)
+    generalMessagesRef.current = next
+    messagesRef.current = next
+    setMessages(next)
+    setInput(sessionRef.current.drafts[GENERAL_SESSION_KEY] ?? '')
+    setWorkspaceOpen(false)
+    setToolsOpen(false)
+    setActiveTab('craft')
+    await getAgent(undefined, 'general')
   }, [busy, getAgent, language])
 
   const newGift = useCallback(() => {
     if (busy) return
     agentsRef.current.delete(NEW_GIFT_KEY)
     activeGiftIdRef.current = undefined
+    creatingGiftRef.current = true
     setActiveGiftId(undefined)
-    const welcome = [welcomeChat(language)]
+    setCreatingGift(true)
+    const welcome = [welcomeMessage(language)]
     messagesRef.current = welcome
     setMessages(welcome)
     setInput(sessionRef.current.drafts[''] ?? '')
-    setActiveTab('chat')
+    setWorkspaceOpen(false)
+    setToolsOpen(false)
+    setActiveTab('craft')
   }, [busy, language])
 
   useEffect(() => {
     let active = true
     void (async () => {
-      const [initialGifts, initialConfig, session] = await Promise.all([
-        giftStore.listGifts(), giftStore.getAgentConfig(), giftStore.getSession(),
+      const [initialGifts, initialConfig, session, generalHistory] = await Promise.all([
+        giftStore.listGifts(), giftStore.getAgentConfig(), giftStore.getSession(), generalStore.getConversation(),
       ])
       if (!active) return
       sessionRef.current = session
@@ -188,14 +242,20 @@ export default function App() {
       if (restored) {
         const history = await giftStore.getConversation(restored.id)
         if (!active) return
-        const next = history.length ? history : [welcomeChat(session.language ?? detectLanguage())]
+        const next = history.length ? history : [welcomeMessage(session.language ?? detectLanguage())]
         activeGiftIdRef.current = restored.id
         setActiveGiftId(restored.id)
         messagesRef.current = next
         setMessages(next)
         await getAgent(restored)
+      } else {
+        const next = generalHistory.length ? generalHistory : [welcomeMessage(session.language ?? detectLanguage())]
+        generalMessagesRef.current = next
+        messagesRef.current = next
+        setMessages(next)
+        await getAgent(undefined, 'general')
       }
-      if (active) setInput(session.drafts[restored?.id ?? ''] ?? '')
+      if (active) setInput(session.drafts[restored?.id ?? GENERAL_SESSION_KEY] ?? '')
     })()
     return () => { active = false }
   }, [getAgent])
@@ -208,10 +268,11 @@ export default function App() {
   }, [activeTab, activeGiftId, language, persistSession])
 
   useEffect(() => {
-    sessionRef.current.drafts[activeGiftId ?? ''] = input
+    const draftKey = activeGiftId ?? (creatingGift ? '' : GENERAL_SESSION_KEY)
+    sessionRef.current.drafts[draftKey] = input
     const timeout = setTimeout(persistSession, 400)
     return () => clearTimeout(timeout)
-  }, [input, activeGiftId, persistSession])
+  }, [input, activeGiftId, creatingGift, persistSession])
 
   useEffect(() => {
     if (!deleteCandidate) return
@@ -224,6 +285,18 @@ export default function App() {
     const timeout = setTimeout(() => setNotice(''), 2400)
     return () => clearTimeout(timeout)
   }, [notice])
+
+  useEffect(() => {
+    if (!toolsOpen && !workspaceOpen && !versionsOpen) return
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      setToolsOpen(false)
+      setWorkspaceOpen(false)
+      setVersionsOpen(false)
+    }
+    window.addEventListener('keydown', closeOnEscape)
+    return () => window.removeEventListener('keydown', closeOnEscape)
+  }, [toolsOpen, workspaceOpen, versionsOpen])
 
   useEffect(() => {
     const composer = composerRef.current
@@ -248,7 +321,7 @@ export default function App() {
     setBusy(true)
     addMessage('user', prompt)
     try {
-      const agent = await getAgent(activeGift)
+      const agent = await getAgent(activeGift, activeGift || creatingGift ? 'gift' : 'general')
       await agent.run(prompt)
     } catch (error) {
       addMessage('assistant', error instanceof Error ? error.message : String(error))
@@ -259,7 +332,9 @@ export default function App() {
   }
 
   const runOfflineCheck = async () => {
-    setActiveTab('chat')
+    setActiveTab('craft')
+    setToolsOpen(false)
+    setWorkspaceOpen(false)
     setBusy(true)
     setStatus(OFFLINE_STATUS)
     try {
@@ -267,7 +342,9 @@ export default function App() {
       await refreshGifts()
       const result: ChatMessage[] = [{ id: crypto.randomUUID(), role: 'assistant', createdAt: Date.now(), text: t('offline.result') }]
       activeGiftIdRef.current = gift.id
+      creatingGiftRef.current = false
       setActiveGiftId(gift.id)
+      setCreatingGift(false)
       messagesRef.current = result
       setMessages(result)
       await giftStore.saveConversation(gift.id, result)
@@ -294,7 +371,7 @@ export default function App() {
       setVersions(await giftStore.listSnapshots(activeGiftId))
       await refreshGifts()
       setVersionsOpen(false)
-      setActiveTab('chat')
+      setActiveTab('craft')
       addMessage('assistant', t('rollback.message', { message: snapshot.message }))
     } catch (error) {
       addMessage('assistant', error instanceof Error ? error.message : String(error))
@@ -317,10 +394,15 @@ export default function App() {
       delete sessionRef.current.drafts[gift.id]
       if (activeGiftIdRef.current === gift.id) {
         activeGiftIdRef.current = undefined
+        creatingGiftRef.current = false
         setActiveGiftId(undefined)
-        const welcome = [welcomeChat(language)]
-        messagesRef.current = welcome
-        setMessages(welcome)
+        setCreatingGift(false)
+        const history = await generalStore.getConversation()
+        const next = history.length ? history : [welcomeMessage(language)]
+        generalMessagesRef.current = next
+        messagesRef.current = next
+        setMessages(next)
+        setInput(sessionRef.current.drafts[GENERAL_SESSION_KEY] ?? '')
       }
       setDeleteCandidate(undefined)
       await refreshGifts()
@@ -334,6 +416,10 @@ export default function App() {
 
   const activeGift = gifts.find((gift) => gift.id === activeGiftId)
   const isWelcome = !activeGiftId && messages.length === 1 && messages[0].id === 'welcome' && !status
+  const suggestions = creatingGift ? giftSuggestions : generalSuggestions
+  const composerPlaceholder = activeGift
+    ? t('composer.giftPlaceholder')
+    : creatingGift ? t('composer.placeholder') : t('composer.generalPlaceholder')
   const filteredInspirations = discoverCategory === 'all' ? inspirations : inspirations.filter((item) => item.category === discoverCategory)
   const subagentStatus = status.startsWith('Subagent: ')
   const baseStatus = subagentStatus ? status.slice('Subagent: '.length) : status
@@ -350,25 +436,45 @@ export default function App() {
     requestAnimationFrame(() => composerRef.current?.focus())
   }
 
+  const startGeneralPrompt = (prompt: string) => {
+    if (busy) return
+    setInput(prompt)
+    requestAnimationFrame(() => composerRef.current?.focus())
+  }
+
   const continueGift = (gift: Gift) => {
     void openGift(gift).then(() => setNotice(t('notice.switched', { name: gift.name })))
   }
 
   return <div className="app-shell">
-    {!settingsOpen && activeTab === 'chat' && <main className="screen chat-screen">
+    {!settingsOpen && activeTab === 'craft' && <main className="screen craft-screen">
+      <header className="workspace-header">
+        <button className="workspace-selector" disabled={busy} onClick={() => setWorkspaceOpen(true)} aria-haspopup="dialog">
+          <span className={`workspace-symbol ${activeGift || creatingGift ? 'gift' : ''}`}>
+            {activeGift ? <Blocks size={19} /> : creatingGift ? <Plus size={20} /> : <MessageCircle size={19} />}
+          </span>
+          <span className="workspace-copy">
+            <strong>{activeGift?.name ?? (creatingGift ? t('workspace.newGift') : t('workspace.general'))}</strong>
+            <small>{activeGift ? (activeGift.releaseSnapshotId ? t('gift.published') : t('gift.developing')) : creatingGift ? t('workspace.newGiftHint') : t('workspace.generalHint')}</small>
+          </span>
+          <ChevronDown className="workspace-chevron" size={16} />
+        </button>
+        <button className="workspace-more" aria-label={t('menu.more')} aria-expanded={toolsOpen} disabled={busy} onClick={() => setToolsOpen(true)}>
+          <MoreHorizontal size={23} />
+        </button>
+      </header>
+
       <section className={`conversation ${isWelcome ? 'welcome-conversation' : ''}`}>
         {isWelcome ? <div className="welcome">
           <CraftMark size="large" />
-          <h1>{t('welcome.title')}</h1>
-          <p>{t('welcome.subtitle')}</p>
+          <h1>{t(creatingGift ? 'welcome.title' : 'welcome.generalTitle')}</h1>
+          <p>{t(creatingGift ? 'welcome.subtitle' : 'welcome.generalSubtitle')}</p>
+          <p className="suggestion-label">{t(creatingGift ? 'welcome.suggestions' : 'welcome.generalSuggestions')}</p>
           <div className="suggestion-list">
-            {chatSuggestions.map(({ key, icon: Icon, prompt }) => <button className="suggestion" key={key} onClick={() => startPrompt(t(prompt))}>
-              <Icon size={19} /><span><strong>{t(`${key}.title`)}</strong><small>{t(`${key}.subtitle`)}</small></span><ChevronRight size={17} />
+            {suggestions.map(({ key, icon: Icon, prompt }) => <button className="suggestion" key={key} onClick={() => creatingGift ? startPrompt(t(prompt)) : startGeneralPrompt(t(prompt))}>
+              <span className="suggestion-icon"><Icon size={19} /></span><span><strong>{t(`${key}.title`)}</strong><small>{t(`${key}.subtitle`)}</small></span><ChevronRight size={17} />
             </button>)}
           </div>
-          <button className="offline-link" disabled={busy} onClick={() => void runOfflineCheck()}>
-            <FlaskConical size={16} />{t('welcome.offline')}<ChevronRight size={15} />
-          </button>
         </div> : <div className="message-list">
           {messages.map((message) => <article className={`message ${message.role}`} key={message.id}>
             {message.role === 'assistant' && <div className="assistant-label"><CraftMark size="small" /><strong>Craft</strong></div>}
@@ -388,11 +494,8 @@ export default function App() {
       </section>
 
       <div className="composer-area">
-        {activeGift && <button className="gift-context" onClick={() => setVersionsOpen(true)}>
-          <FolderGit2 size={15} /><span>{activeGift.name}</span><small>{activeGift.releaseSnapshotId ? t('gift.published') : t('gift.developing')}</small><ChevronRight size={14} />
-        </button>}
         <form className="composer" onSubmit={send}>
-          <textarea ref={composerRef} aria-label={t('composer.send')} value={input} rows={1}
+          <textarea ref={composerRef} aria-label={composerPlaceholder} value={input} rows={1}
             onChange={(event) => setInput(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === 'Enter' && !event.shiftKey) {
@@ -400,18 +503,16 @@ export default function App() {
                 event.currentTarget.form?.requestSubmit()
               }
             }}
-            placeholder={t('composer.placeholder')} />
-          <div className="composer-footer">
-            <button className="composer-tool" type="button" aria-label={t('profile.offline')} disabled={busy} onClick={() => void runOfflineCheck()}><FlaskConical size={17} /><span>{t('composer.offline')}</span></button>
-            <button className="send-button" aria-label={t('composer.send')} disabled={busy || !input.trim()} type="submit">
-              {busy ? <LoaderCircle className="spin" size={19} /> : <ArrowUp size={20} />}
-            </button>
-          </div>
+            placeholder={composerPlaceholder} />
+          <button className="send-button" aria-label={t('composer.send')} disabled={busy || !input.trim()} type="submit">
+            {busy ? <LoaderCircle className="spin" size={19} /> : <ArrowUp size={20} />}
+          </button>
         </form>
       </div>
     </main>}
 
     {!settingsOpen && activeTab === 'discover' && <main className="screen tab-screen discover-screen">
+      <header className="section-header"><div><h1>{t('discover.title')}</h1><p>{t('discover.subtitle')}</p></div></header>
       <article className="featured-card">
         <span className="eyebrow">{t('featured.eyebrow')}</span>
         <div className="featured-icon"><Timer size={29} /></div>
@@ -430,33 +531,38 @@ export default function App() {
       </section>
     </main>}
 
-    {!settingsOpen && activeTab === 'gifts' && <main className="screen tab-screen">
+    {!settingsOpen && activeTab === 'gifts' && <main className="screen tab-screen gifts-screen">
+      <header className="section-header">
+        <div><h1>{t('gifts.title')}</h1><p>{t('gifts.subtitle')}</p></div>
+        <button className="section-action" aria-label={t('gifts.new')} disabled={busy} onClick={newGift}><Plus size={21} /></button>
+      </header>
       {gifts.length === 0 ? <div className="empty-gifts">
         <span><Lightbulb size={29} /></span><h2>{t('empty.title')}</h2><p>{t('empty.body')}</p>
         <button className="primary-button" onClick={() => startPrompt('')}>{t('empty.cta')}<ArrowUp size={17} /></button>
-      </div> : <>
-        <button className="primary-button new-gift-button" disabled={busy} onClick={newGift}><Plus size={17} />{t('gifts.new')}</button>
-        <section className="gift-list" aria-label={t('gifts.aria')}>
-        {gifts.map((gift, index) => <article className="gift-row" key={gift.id}>
-          <button className="gift-open" disabled={!gift.releaseSnapshotId} onClick={() => void runtime.openRelease(gift.id, gift.name)}>
+      </div> : <section className="gift-list" aria-label={t('gifts.aria')}>
+        {gifts.map((gift, index) => <article className={`gift-row ${activeGiftId === gift.id ? 'current' : ''}`} key={gift.id}>
+          <button className="gift-open" disabled={busy} onClick={() => continueGift(gift)}>
             <span className={`gift-icon tone-${index % 4}`}><Blocks size={22} /></span>
-            <span className="gift-info"><strong>{gift.name}</strong><small><i className={gift.releaseSnapshotId ? 'published' : ''} />{gift.releaseSnapshotId ? t('gift.published') : t('gift.developing')} · {new Intl.DateTimeFormat(locale, { month: 'short', day: 'numeric' }).format(gift.updatedAt)}</small></span>
-            {gift.releaseSnapshotId ? <ChevronRight className="gift-chevron" size={18} /> : null}
+            <span className="gift-info">
+              <span className="gift-title"><strong>{gift.name}</strong>{activeGiftId === gift.id && <em>{t('gift.current')}</em>}</span>
+              <small><i className={gift.releaseSnapshotId ? 'published' : ''} />{gift.releaseSnapshotId ? t('gift.published') : t('gift.developing')} · {new Intl.DateTimeFormat(locale, { month: 'short', day: 'numeric' }).format(gift.updatedAt)}</small>
+            </span>
+            <ChevronRight className="gift-chevron" size={17} />
           </button>
-          <button className="gift-edit" aria-label={t('gift.continue', { name: gift.name })} disabled={busy} onClick={() => continueGift(gift)}><MessageSquare size={18} /></button>
+          {gift.releaseSnapshotId && <button className="gift-launch" aria-label={t('gift.openRelease', { name: gift.name })} onClick={() => void runtime.openRelease(gift.id, gift.name)}><Play size={17} /></button>}
           <button className={`gift-delete ${deleteCandidate === gift.id ? 'confirming' : ''}`} aria-label={t('gift.delete', { name: gift.name })} disabled={busy} onClick={() => void deleteGift(gift)}>
             {deleteCandidate === gift.id ? t('gift.deleteConfirm') : <Trash2 size={17} />}
           </button>
         </article>)}
-      </section></>}
+      </section>}
     </main>}
 
     {!settingsOpen && activeTab === 'profile' && <main className="screen tab-screen profile-screen">
+      <header className="section-header"><div><h1>{t('nav.profile')}</h1></div></header>
       <section className="profile-card"><CraftMark size="large" /><div><h2>{t('profile.title')}</h2><p>{t('profile.summary', { total: gifts.length, published: gifts.filter((gift) => gift.releaseSnapshotId).length })}</p></div></section>
       <p className="menu-label">{t('profile.settings')}</p>
       <section className="settings-list">
         <button onClick={() => setSettingsOpen(true)}><span className="settings-icon"><Sparkles size={19} /></span><span><strong>{t('profile.model')}</strong><small>{config.model || t('profile.modelHint')}</small></span><ChevronRight size={18} /></button>
-        <button disabled={busy} onClick={() => void runOfflineCheck()}><span className="settings-icon"><FlaskConical size={19} /></span><span><strong>{t('profile.offline')}</strong><small>{t('profile.offlineHint')}</small></span><ChevronRight size={18} /></button>
         <div className="language-row"><span className="settings-icon"><Languages size={19} /></span><span><strong>{t('profile.language')}</strong></span>
           <div className="effort-options language-options" role="group" aria-label={t('profile.language')}>
             {(['zh', 'en'] as const).map((option) => <button key={option} type="button" className={language === option ? 'active' : ''} aria-pressed={language === option} onClick={() => setLanguage(option)}>{option === 'zh' ? '中文' : 'English'}</button>)}
@@ -470,16 +576,53 @@ export default function App() {
       </section>
     </main>}
 
-    {!settingsOpen && <nav className="bottom-nav" aria-label={t('nav.chat')}>
+    {!settingsOpen && <nav className="bottom-nav" aria-label={t('nav.craft')}>
       {([
-        { id: 'chat', label: t('nav.chat'), icon: MessageCircle },
-        { id: 'discover', label: t('nav.discover'), icon: Compass },
+        { id: 'craft', label: t('nav.craft'), icon: Sparkles },
         { id: 'gifts', label: t('nav.gifts'), icon: LayoutGrid },
+        { id: 'discover', label: t('nav.discover'), icon: Compass },
         { id: 'profile', label: t('nav.profile'), icon: CircleUserRound },
       ] as { id: Tab; label: string; icon: LucideIcon }[]).map(({ id, label, icon: Icon }) => <button key={id} className={activeTab === id ? 'active' : ''} aria-current={activeTab === id ? 'page' : undefined} onClick={() => setActiveTab(id)}>
         <span><Icon size={22} strokeWidth={activeTab === id ? 2.3 : 1.8} /></span><small>{label}</small>
       </button>)}
     </nav>}
+
+    {toolsOpen && <>
+      <button className="tools-dismiss" aria-label={t('menu.close')} onClick={() => setToolsOpen(false)} />
+      <section className="tools-menu" role="menu" aria-label={t('menu.more')}>
+        {activeGift && <>
+          <button role="menuitem" onClick={() => { setToolsOpen(false); setVersionsOpen(true) }}><FolderGit2 size={18} /><span>{t('menu.versions')}</span><ChevronRight size={15} /></button>
+          {activeGift.releaseSnapshotId && <button role="menuitem" onClick={() => { setToolsOpen(false); void runtime.openRelease(activeGift.id, activeGift.name) }}><Play size={18} /><span>{t('menu.openRelease')}</span><ChevronRight size={15} /></button>}
+        </>}
+        <button role="menuitem" onClick={() => { setToolsOpen(false); setActiveTab('gifts') }}><LayoutGrid size={18} /><span>{t('menu.manageGifts')}</span><ChevronRight size={15} /></button>
+        <div className="tools-separator" />
+        <button role="menuitem" onClick={() => void openGeneral()}><MessageSquarePlus size={18} /><span>{t('workspace.openGeneral')}</span></button>
+        <button role="menuitem" onClick={newGift}><Plus size={19} /><span>{t('workspace.newGiftAction')}</span></button>
+        <div className="tools-separator" />
+        <button role="menuitem" onClick={() => void runOfflineCheck()}><FlaskConical size={18} /><span><strong>{t('menu.offline')}</strong><small>{t('menu.offlineHint')}</small></span></button>
+        <button role="menuitem" onClick={() => { setToolsOpen(false); setSettingsOpen(true) }}><Settings2 size={18} /><span>{t('menu.modelSettings')}</span><ChevronRight size={15} /></button>
+      </section>
+    </>}
+
+    {workspaceOpen && <div className="sheet-backdrop" onClick={(event) => { if (event.target === event.currentTarget) setWorkspaceOpen(false) }}>
+      <section className="bottom-sheet workspace-sheet" role="dialog" aria-modal="true" aria-label={t('workspace.switch')}>
+        <div className="sheet-handle" />
+        <header><div><h2>{t('workspace.switch')}</h2><p>{t('workspace.generalHint')}</p></div><button className="round-icon" aria-label={t('menu.close')} onClick={() => setWorkspaceOpen(false)}><X size={19} /></button></header>
+        <div className="workspace-list">
+          <button className={`workspace-option ${!activeGift && !creatingGift ? 'selected' : ''}`} onClick={() => void openGeneral()}>
+            <span className="workspace-option-icon"><MessageCircle size={20} /></span>
+            <span><strong>{t('workspace.general')}</strong><small>{t('workspace.generalHint')}</small></span>
+            {!activeGift && !creatingGift && <Check size={18} />}
+          </button>
+          {gifts.map((gift, index) => <button className={`workspace-option ${activeGiftId === gift.id ? 'selected' : ''}`} key={gift.id} onClick={() => continueGift(gift)}>
+            <span className={`workspace-option-icon tone-${index % 4}`}><Blocks size={20} /></span>
+            <span><strong>{gift.name}</strong><small>{gift.releaseSnapshotId ? t('gift.published') : t('gift.developing')}</small></span>
+            {activeGiftId === gift.id && <Check size={18} />}
+          </button>)}
+        </div>
+        <button className="workspace-create" onClick={newGift}><Plus size={18} />{t('workspace.newGiftAction')}</button>
+      </section>
+    </div>}
 
     {settingsOpen && <main className="screen settings-page">
       <header className="page-header">

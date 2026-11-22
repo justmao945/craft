@@ -23,6 +23,16 @@ interface CraftGiftPlugin {
   archiveModelContext(options: { giftId: string; jsonl: string }): Promise<{ file: string }>
   listContextArchives(options: { giftId: string }): Promise<{ files: string[] }>
   readContextArchive(options: { giftId: string; file: string }): Promise<{ jsonl: string }>
+  listGeneralFiles(): Promise<{ files: string[] }>
+  readGeneralFile(options: { path: string }): Promise<{ content: string }>
+  writeGeneralFile(options: { path: string; content: string }): Promise<{ ok: boolean }>
+  getGeneralConversation(): Promise<{ json: string }>
+  saveGeneralConversation(options: { json: string }): Promise<{ ok: boolean }>
+  getGeneralModelContext(): Promise<{ jsonl: string }>
+  saveGeneralModelContext(options: { jsonl: string }): Promise<{ ok: boolean }>
+  archiveGeneralModelContext(options: { jsonl: string }): Promise<{ file: string }>
+  listGeneralContextArchives(): Promise<{ files: string[] }>
+  readGeneralContextArchive(options: { file: string }): Promise<{ jsonl: string }>
   getSession(): Promise<{ json: string }>
   saveSession(options: { json: string }): Promise<{ ok: boolean }>
   setAgentConfig(options: AgentConfig): Promise<{ ok: boolean }>
@@ -68,7 +78,7 @@ function normalizeEffort(effort: string): AgentConfig['reasoningEffort'] {
 }
 
 function assertPath(path: string): void {
-  if (!path || path.startsWith('/') || path.split('/').includes('..')) throw new Error('Invalid gift path')
+  if (!path || path.startsWith('/') || path.split('/').includes('..')) throw new Error('Invalid workspace path')
 }
 
 /** Android-native Gift storage; every method rejects on native errors. */
@@ -169,7 +179,8 @@ export const giftStore = {
     const { json } = await project.getSession()
     if (!json) return { drafts: {} }
     const session = JSON.parse(json) as SessionState
-    return { ...session, drafts: session.drafts ?? {} }
+    const activeTab = (session.activeTab as string) === 'chat' ? 'craft' : session.activeTab
+    return { ...session, activeTab, drafts: session.drafts ?? {} }
   },
 
   async saveSession(session: SessionState): Promise<void> {
@@ -183,6 +194,53 @@ export const giftStore = {
 
   async setAgentConfig(config: AgentConfig): Promise<void> {
     await project.setAgentConfig(config)
+  },
+}
+
+/** Persistent general conversation and its fixed, project-independent workspace. */
+export const generalStore = {
+  async listFiles(): Promise<string[]> {
+    return (await project.listGeneralFiles()).files
+  },
+
+  async readFile(path: string): Promise<string> {
+    assertPath(path)
+    return (await project.readGeneralFile({ path })).content
+  },
+
+  async writeFile(path: string, content: string): Promise<void> {
+    assertPath(path)
+    await project.writeGeneralFile({ path, content })
+  },
+
+  async getConversation(): Promise<ChatMessage[]> {
+    const { json } = await project.getGeneralConversation()
+    return JSON.parse(json) as ChatMessage[]
+  },
+
+  async saveConversation(messages: ChatMessage[]): Promise<void> {
+    const persisted = messages.filter((message) => message.role !== 'status')
+    await project.saveGeneralConversation({ json: JSON.stringify(persisted) })
+  },
+
+  async getModelContext(): Promise<string> {
+    return (await project.getGeneralModelContext()).jsonl
+  },
+
+  async saveModelContext(jsonl: string): Promise<void> {
+    await project.saveGeneralModelContext({ jsonl })
+  },
+
+  async archiveModelContext(jsonl: string): Promise<void> {
+    await project.archiveGeneralModelContext({ jsonl })
+  },
+
+  async listContextArchives(): Promise<string[]> {
+    return (await project.listGeneralContextArchives()).files
+  },
+
+  async readContextArchive(file: string): Promise<string> {
+    return (await project.readGeneralContextArchive({ file })).jsonl
   },
 }
 
