@@ -1,5 +1,5 @@
 import { registerPlugin } from '@capacitor/core'
-import type { AgentConfig, BuildArtifact, ChatMessage, Gift, SessionState, Snapshot, StorageStatus, Workspace } from '../types'
+import type { AgentConfig, ChatMessage, Gift, SessionState, Snapshot, StorageStatus, Workspace } from '../types'
 
 interface CraftGiftPlugin {
   getStorageStatus(): Promise<StorageStatus>
@@ -14,8 +14,6 @@ interface CraftGiftPlugin {
   createSnapshot(options: { giftId: string; message: string }): Promise<{ snapshot: Snapshot }>
   listSnapshots(options: { giftId: string }): Promise<{ snapshots: Snapshot[] }>
   saveBuild(options: { giftId: string; snapshotId?: string; js: string; css: string; draft: boolean }): Promise<{ buildId: string }>
-  getDraftBuild(options: { giftId: string }): Promise<BuildArtifact>
-  getReleaseBuild(options: { giftId: string }): Promise<BuildArtifact>
   publish(options: { giftId: string; snapshotId: string }): Promise<{ gift: Gift }>
   rollback(options: { giftId: string; snapshotId: string }): Promise<{ gift: Gift; snapshot: Snapshot }>
   getConversation(options: { giftId: string }): Promise<{ json: string }>
@@ -62,7 +60,7 @@ interface CraftRuntimePlugin {
   logs(options?: Record<string, never>): Promise<{ logs: string[] }>
 }
 
-const project = registerPlugin<CraftGiftPlugin>('CraftGift')
+const giftPlugin = registerPlugin<CraftGiftPlugin>('CraftGift')
 const preview = registerPlugin<CraftRuntimePlugin>('CraftRuntime')
 
 const defaultConfig: AgentConfig = {
@@ -86,107 +84,99 @@ function assertPath(path: string): void {
 /** Android-native Gift storage; every method rejects on native errors. */
 export const giftStore = {
   async getStorageStatus(): Promise<StorageStatus> {
-    return project.getStorageStatus()
+    return giftPlugin.getStorageStatus()
   },
 
   async requestStorageAccess(): Promise<void> {
-    await project.requestStorageAccess()
+    await giftPlugin.requestStorageAccess()
   },
 
   async listGifts(): Promise<Gift[]> {
-    return (await project.listGifts()).gifts
+    return (await giftPlugin.listGifts()).gifts
   },
 
   async createGift(name: string): Promise<Gift> {
-    return (await project.createGift({ name })).gift
+    return (await giftPlugin.createGift({ name })).gift
   },
 
   /** Deletes registry entry, workspace git repo, snapshots, builds, conversation and model context. */
   async deleteGift(giftId: string): Promise<void> {
-    await project.deleteGift({ giftId })
+    await giftPlugin.deleteGift({ giftId })
   },
 
   async getWorkspace(giftId: string): Promise<Workspace> {
-    return project.getWorkspace({ giftId })
+    return giftPlugin.getWorkspace({ giftId })
   },
 
   async listFiles(giftId: string): Promise<string[]> {
-    return (await project.listFiles({ giftId })).files
+    return (await giftPlugin.listFiles({ giftId })).files
   },
 
   async readFile(giftId: string, path: string): Promise<string> {
     assertPath(path)
-    return (await project.readFile({ giftId, path })).content
+    return (await giftPlugin.readFile({ giftId, path })).content
   },
 
   async writeFile(giftId: string, path: string, content: string): Promise<void> {
     assertPath(path)
-    await project.writeFile({ giftId, path, content })
+    await giftPlugin.writeFile({ giftId, path, content })
   },
 
   /** Commits the whole workspace to its git repo; snapshot id is the commit hash. */
   async createSnapshot(giftId: string, message: string): Promise<Snapshot> {
-    return (await project.createSnapshot({ giftId, message })).snapshot
+    return (await giftPlugin.createSnapshot({ giftId, message })).snapshot
   },
 
   async listSnapshots(giftId: string): Promise<Snapshot[]> {
-    return (await project.listSnapshots({ giftId })).snapshots
+    return (await giftPlugin.listSnapshots({ giftId })).snapshots
   },
 
   async saveBuild(giftId: string, snapshotId: string | undefined, js: string, css: string, draft: boolean): Promise<string> {
-    return (await project.saveBuild({ giftId, snapshotId, js, css, draft })).buildId
-  },
-
-  async getDraftBuild(giftId: string): Promise<BuildArtifact> {
-    return project.getDraftBuild({ giftId })
-  },
-
-  async getReleaseBuild(giftId: string): Promise<BuildArtifact> {
-    return project.getReleaseBuild({ giftId })
+    return (await giftPlugin.saveBuild({ giftId, snapshotId, js, css, draft })).buildId
   },
 
   async publish(giftId: string, snapshotId: string): Promise<Gift> {
-    return (await project.publish({ giftId, snapshotId })).gift
+    return (await giftPlugin.publish({ giftId, snapshotId })).gift
   },
 
   async rollback(giftId: string, snapshotId: string): Promise<void> {
-    await project.rollback({ giftId, snapshotId })
+    await giftPlugin.rollback({ giftId, snapshotId })
   },
 
   async getConversation(giftId: string): Promise<ChatMessage[]> {
-    const { json } = await project.getConversation({ giftId })
+    const { json } = await giftPlugin.getConversation({ giftId })
     return JSON.parse(json) as ChatMessage[]
   },
 
   async saveConversation(giftId: string, messages: ChatMessage[]): Promise<void> {
     const persisted = messages.filter((message) => message.role !== 'status')
-    await project.saveConversation({ giftId, json: JSON.stringify(persisted) })
+    await giftPlugin.saveConversation({ giftId, json: JSON.stringify(persisted) })
   },
 
   /** Full model transcript (JSONL), including tool calls and reasoning; '' when none saved yet. */
   async getModelContext(giftId: string): Promise<string> {
-    return (await project.getModelContext({ giftId })).jsonl
+    return (await giftPlugin.getModelContext({ giftId })).jsonl
   },
 
   async saveModelContext(giftId: string, jsonl: string): Promise<void> {
-    await project.saveModelContext({ giftId, jsonl })
+    await giftPlugin.saveModelContext({ giftId, jsonl })
   },
 
   /** Pre-compaction transcript, kept as a new timestamped file per compaction. */
   async archiveModelContext(giftId: string, jsonl: string): Promise<void> {
-    await project.archiveModelContext({ giftId, jsonl })
+    await giftPlugin.archiveModelContext({ giftId, jsonl })
   },
 
   async listContextArchives(giftId: string): Promise<string[]> {
-    return (await project.listContextArchives({ giftId })).files
+    return (await giftPlugin.listContextArchives({ giftId })).files
   },
 
   async readContextArchive(giftId: string, file: string): Promise<string> {
-    return (await project.readContextArchive({ giftId, file })).jsonl
+    return (await giftPlugin.readContextArchive({ giftId, file })).jsonl
   },
 
   async getSession(): Promise<SessionState> {
-    const { json } = await project.getSession()
+    const { json } = await giftPlugin.getSession()
     if (!json) return { drafts: {} }
     const session = JSON.parse(json) as SessionState
     const activeTab = (session.activeTab as string) === 'chat' ? 'craft' : session.activeTab
@@ -194,63 +184,63 @@ export const giftStore = {
   },
 
   async saveSession(session: SessionState): Promise<void> {
-    await project.saveSession({ json: JSON.stringify(session) })
+    await giftPlugin.saveSession({ json: JSON.stringify(session) })
   },
 
   async getAgentConfig(): Promise<AgentConfig> {
-    const config = await project.getAgentConfig()
+    const config = await giftPlugin.getAgentConfig()
     return { ...defaultConfig, ...config, reasoningEffort: normalizeEffort(config.reasoningEffort) }
   },
 
   async setAgentConfig(config: AgentConfig): Promise<void> {
-    await project.setAgentConfig(config)
+    await giftPlugin.setAgentConfig(config)
   },
 }
 
 /** Persistent general conversation and its fixed, project-independent workspace. */
 export const generalStore = {
   async listFiles(): Promise<string[]> {
-    return (await project.listGeneralFiles()).files
+    return (await giftPlugin.listGeneralFiles()).files
   },
 
   async readFile(path: string): Promise<string> {
     assertPath(path)
-    return (await project.readGeneralFile({ path })).content
+    return (await giftPlugin.readGeneralFile({ path })).content
   },
 
   async writeFile(path: string, content: string): Promise<void> {
     assertPath(path)
-    await project.writeGeneralFile({ path, content })
+    await giftPlugin.writeGeneralFile({ path, content })
   },
 
   async getConversation(): Promise<ChatMessage[]> {
-    const { json } = await project.getGeneralConversation()
+    const { json } = await giftPlugin.getGeneralConversation()
     return JSON.parse(json) as ChatMessage[]
   },
 
   async saveConversation(messages: ChatMessage[]): Promise<void> {
     const persisted = messages.filter((message) => message.role !== 'status')
-    await project.saveGeneralConversation({ json: JSON.stringify(persisted) })
+    await giftPlugin.saveGeneralConversation({ json: JSON.stringify(persisted) })
   },
 
   async getModelContext(): Promise<string> {
-    return (await project.getGeneralModelContext()).jsonl
+    return (await giftPlugin.getGeneralModelContext()).jsonl
   },
 
   async saveModelContext(jsonl: string): Promise<void> {
-    await project.saveGeneralModelContext({ jsonl })
+    await giftPlugin.saveGeneralModelContext({ jsonl })
   },
 
   async archiveModelContext(jsonl: string): Promise<void> {
-    await project.archiveGeneralModelContext({ jsonl })
+    await giftPlugin.archiveGeneralModelContext({ jsonl })
   },
 
   async listContextArchives(): Promise<string[]> {
-    return (await project.listGeneralContextArchives()).files
+    return (await giftPlugin.listGeneralContextArchives()).files
   },
 
   async readContextArchive(file: string): Promise<string> {
-    return (await project.readGeneralContextArchive({ file })).jsonl
+    return (await giftPlugin.readGeneralContextArchive({ file })).jsonl
   },
 }
 

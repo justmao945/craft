@@ -2,6 +2,4 @@
 <resources>
     <string name="app_name">Craft</string>
     <string name="title_activity_main">Craft</string>
-    <string name="package_name">app.craft.android</string>
-    <string name="custom_url_scheme">app.craft.android</string>
 </resources>

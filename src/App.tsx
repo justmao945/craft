@@ -7,9 +7,10 @@ import {
   ShieldCheck, Sparkles, Timer, Trash2, X,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
-import { AgentRuntime } from './agent/AgentRuntime'
+import { AgentRuntime, AGENT_ROUND_STATUS_PREFIX, SUBAGENT_STATUS_PREFIX } from './agent/AgentRuntime'
+import { COMPACTION_STATUS } from './agent/context'
 import { generalStore, giftStore, runtime } from './native/craft'
-import { detectLanguage, translate } from './i18n'
+import { detectLanguage, isMessageKey, translate } from './i18n'
 import type { Language, MessageKey } from './i18n'
 import type { AgentConfig, ChatMessage, Gift, SessionState, Snapshot, StorageStatus } from './types'
 import './styles.css'
@@ -19,7 +20,6 @@ type AgentMode = 'gift' | 'general'
 
 const NEW_GIFT_KEY = '__new__'
 const GENERAL_SESSION_KEY = '__general__'
-const COMPACT_STATUS = 'Compacting earlier context into archive pages'
 
 type InspirationId = 'focus' | 'ledger' | 'habit' | 'travel' | 'words' | 'water'
 type InspirationCategory = 'productivity' | 'finance' | 'life' | 'study'
@@ -363,7 +363,9 @@ export default function App() {
     setBusy(true)
     addMessage('user', prompt)
     try {
-      const agent = await getAgent(activeGift, activeGift || creatingGift ? 'gift' : 'general')
+      const agent = activeGift
+        ? await getAgent(activeGift)
+        : await getAgent(undefined, creatingGift ? 'gift' : 'general')
       await agent.run(prompt)
     } catch (error) {
       addMessage('assistant', error instanceof Error ? error.message : String(error))
@@ -454,12 +456,13 @@ export default function App() {
       ? { hour: '2-digit', minute: '2-digit' }
       : { month: 'short', day: 'numeric' }).format(date)
   }
-  const subagentStatus = status.startsWith('Subagent: ')
-  const baseStatus = subagentStatus ? status.slice('Subagent: '.length) : status
+  const subagentStatus = status.startsWith(SUBAGENT_STATUS_PREFIX)
+  const baseStatus = subagentStatus ? status.slice(SUBAGENT_STATUS_PREFIX.length) : status
+  const statusKey = `status.${baseStatus}`
   const statusText = (subagentStatus ? t('status.subagent') : '') + (
-    baseStatus.startsWith('Agent round') ? t('status.working')
-      : baseStatus === COMPACT_STATUS ? t('status.compacting')
-          : t(`status.${baseStatus}` as MessageKey) || baseStatus)
+    baseStatus.startsWith(AGENT_ROUND_STATUS_PREFIX) ? t('status.working')
+      : baseStatus === COMPACTION_STATUS ? t('status.compacting')
+          : isMessageKey(statusKey) ? t(statusKey) : baseStatus)
 
   const startPrompt = (prompt: string) => {
     if (busy) return
@@ -475,7 +478,7 @@ export default function App() {
   }
 
   const continueGift = (gift: Gift) => {
-    void openGift(gift).then(() => setNotice(t('notice.switched', { name: gift.name })))
+    void openGift(gift)
   }
 
   const requestSharedStorage = async () => {

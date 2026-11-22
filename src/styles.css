@@ -177,7 +177,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .gift-info { display: grid; min-width: 0; flex: 1; gap: 7px; }
 .gift-title { display: flex; min-width: 0; align-items: center; gap: 7px; }
 .gift-title strong { overflow: hidden; font-size: 14px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-.gift-title em { flex: 0 0 auto; border-radius: 999px; background: var(--accent-soft); padding: 3px 6px; color: var(--accent); font-size: 9px; font-style: normal; font-weight: 600; }
 .gift-info small { display: flex; align-items: center; gap: 5px; color: var(--muted); font-size: 10px; }
 .gift-info i { width: 5px; height: 5px; flex: 0 0 auto; border-radius: 50%; background: #c1a35f; }
 .gift-info i.published { background: #62a078; }
@@ -208,8 +207,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .tools-menu > button > svg { flex: 0 0 auto; color: #747784; }
 .tools-menu > button > svg:last-child:not(:first-child) { margin-left: auto; color: #adaeb8; }
 .tools-menu > button > span { display: grid; min-width: 0; flex: 1; gap: 3px; font-size: 13px; }
-.tools-menu > button strong { font-size: 13px; font-weight: 550; }
-.tools-menu > button small { color: var(--muted); font-size: 10px; }
 .settings-page { background: var(--bg); }
 .page-header { display: grid; flex: 0 0 auto; grid-template-columns: 42px 1fr 42px; align-items: center; border-bottom: 1px solid var(--line); padding: max(8px, env(safe-area-inset-top)) 12px 8px; }
 .page-header h1 { margin: 0; font-size: 16px; font-weight: 600; text-align: center; }

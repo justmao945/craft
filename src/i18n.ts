@@ -28,6 +28,7 @@ const zh = {
   'suggestion.habit.subtitle': '追踪目标与连续天数',
   'suggestion.notes.title': '做一个灵感笔记',
   'suggestion.notes.subtitle': '随时记录，快速查找',
+  'suggestion.notes.prompt': '做一个灵感笔记应用，支持快速记录、标签分类、全文搜索和本地保存。',
   'nav.craft': '工坊',
   'nav.gifts': '作品',
   'nav.discover': '广场',
@@ -64,7 +65,6 @@ const zh = {
   'empty.title': '下一个作品，从一句话开始',
   'empty.body': '告诉 Craft 你的想法，它会完成代码、预览和测试。',
   'empty.cta': '创建第一个作品',
-  'notice.switched': '已切换到 {name}',
   'notice.deleted': '已删除 {name}',
   'notice.configSaved': '模型配置已保存',
   'profile.settings': '工作区设置',
@@ -144,7 +144,6 @@ const zh = {
   'inspiration.water.name': '喝水记录',
   'inspiration.water.description': '一杯一杯，完成今日目标',
   'inspiration.water.prompt': '做一个喝水记录应用，可以设置每日目标、快捷记录饮水量、查看今日进度和历史趋势。',
-  'suggestion.notes.prompt': '做一个灵感笔记应用，支持快速记录、标签分类、全文搜索和本地保存。',
 }
 
 export type MessageKey = keyof typeof zh
@@ -171,6 +170,7 @@ const en: Record<MessageKey, string> = {
   'suggestion.habit.subtitle': 'Goals and streaks',
   'suggestion.notes.title': 'An idea notebook',
   'suggestion.notes.subtitle': 'Capture quickly, find instantly',
+  'suggestion.notes.prompt': 'Build an idea-notebook Gift with quick capture, tags, full-text search and local persistence.',
   'nav.craft': 'Craft',
   'nav.gifts': 'Gifts',
   'nav.discover': 'Discover',
@@ -207,7 +207,6 @@ const en: Record<MessageKey, string> = {
   'empty.title': 'Your next Gift starts with one sentence',
   'empty.body': 'Tell Craft your idea; it handles code, preview and testing.',
   'empty.cta': 'Create your first Gift',
-  'notice.switched': 'Switched to {name}',
   'notice.deleted': 'Deleted {name}',
   'notice.configSaved': 'Model settings saved',
   'profile.settings': 'Workspace settings',
@@ -287,10 +286,14 @@ const en: Record<MessageKey, string> = {
   'inspiration.water.name': 'Water tracker',
   'inspiration.water.description': 'One cup at a time',
   'inspiration.water.prompt': 'Build a water tracker Gift with daily goals, quick logging, today progress and history trends.',
-  'suggestion.notes.prompt': 'Build an idea-notebook Gift with quick capture, tags, full-text search and local persistence.',
 }
 
 const dictionaries: Record<Language, Record<MessageKey, string>> = { zh, en }
+
+/** Narrows a dynamic string (e.g. `status.${tool}`) to a real key without a cast. */
+export function isMessageKey(value: string): value is MessageKey {
+  return value in dictionaries.zh
+}
 
 export function translate(language: Language, key: MessageKey, vars: Record<string, string | number> = {}): string {
   let text = dictionaries[language][key]

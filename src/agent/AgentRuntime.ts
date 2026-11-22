@@ -3,11 +3,16 @@ import { z } from 'zod'
 import { compileProject } from '../compiler/compiler'
 import { generalStore, giftStore, runtime } from '../native/craft'
 import type { AgentConfig, Gift, BuildArtifact, ChatMessage } from '../types'
+import { COMPACTION_STATUS } from './context'
 import type { AssistantMessage, ContentPart, ModelMessage } from './context'
 import {
   applyFileEdit, contextChars, decodeContextJsonl, encodeContextJsonl, findCompactionCut, sliceFileLines,
 } from './context'
 import { renderContextImages } from './contextImage'
+
+/** Status-literal contract with App.tsx: 'Agent round N: reasoning' and the subagent prefix. */
+export const AGENT_ROUND_STATUS_PREFIX = 'Agent round '
+export const SUBAGENT_STATUS_PREFIX = 'Subagent: '
 
 type ToolArguments = Record<string, unknown>
 
@@ -193,7 +198,7 @@ export class AgentRuntime {
     let screenshotMessage: ModelMessage | undefined
     for (let round = 0; round < maxRounds; round++) {
       await this.compactIfNeeded(messages)
-      this.hooks.onStatus(`${statusPrefix}Agent round ${round + 1}: reasoning`)
+      this.hooks.onStatus(`${statusPrefix}${AGENT_ROUND_STATUS_PREFIX}${round + 1}: reasoning`)
       const assistant = await this.requestAssistant(config, messages, activeTools)
       if (screenshotMessage) {
         // Only the newest screenshot stays in context; drop the previous one (if not archived already).
@@ -249,7 +254,7 @@ export class AgentRuntime {
     const cut = findCompactionCut(messages, RECENT_CHAR_LIMIT)
     const archived = messages.slice(1, cut)
     if (!archived.length) return
-    this.hooks.onStatus('Compacting earlier context into archive pages')
+    this.hooks.onStatus(COMPACTION_STATUS)
     await this.hooks.onArchive?.(encodeContextJsonl(archived))
     const { images, droppedPages } = renderContextImages(archived)
     const note = `[Context compacted] ${archived.length} earlier messages are rendered in the attached ${images.length} archive page image(s).`
@@ -270,7 +275,7 @@ export class AgentRuntime {
       { role: 'system', content: `${subagentPrompt}\nCurrent Gift: "${this.currentGiftName}" (id: ${this.currentGiftId}).` },
       { role: 'user', content: task },
     ]
-    const report = await this.runLoop(config, messages, subagentTools, 8, 'Subagent: ')
+    const report = await this.runLoop(config, messages, subagentTools, 8, SUBAGENT_STATUS_PREFIX)
     return { ok: true, report }
   }
 

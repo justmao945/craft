@@ -1,5 +1,8 @@
 /** Pure model-context helpers: JSONL codec, file edits and compaction cut points. No platform imports. */
 
+/** Status string emitted while compaction renders archive pages; App.tsx translates it. */
+export const COMPACTION_STATUS = 'Compacting earlier context into archive pages'
+
 export interface ToolCall {
   id: string
   function: { name: string; arguments: string }

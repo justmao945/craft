@@ -732,7 +732,7 @@ public class CraftStore {
         return buildId;
     }
 
-    public Build getBuild(String giftId, String buildId) throws IOException {
+    Build getBuild(String giftId, String buildId) throws IOException {
         requireGift(giftId);
         checkSegment(buildId, "build id");
         File buildDir = new File(buildsDir(giftId), buildId);

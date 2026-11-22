@@ -289,33 +289,6 @@ public class CraftGiftPlugin extends Plugin {
         }
     }
 
-    @PluginMethod
-    public void getDraftBuild(PluginCall call) {
-        getBuildByEnvironment(call, "draft");
-    }
-
-    @PluginMethod
-    public void getReleaseBuild(PluginCall call) {
-        getBuildByEnvironment(call, "release");
-    }
-
-    private void getBuildByEnvironment(PluginCall call, String environment) {
-        String giftId = requiredString(call, "giftId", "giftId");
-        if (giftId == null) {
-            return;
-        }
-        try {
-            CraftStore.Build build = store.getBuildFor(giftId, environment);
-            JSObject ret = new JSObject();
-            ret.put("buildId", build.buildId);
-            ret.put("js", build.js);
-            ret.put("css", build.css);
-            call.resolve(ret);
-        } catch (Exception e) {
-            call.reject(e.getMessage(), e);
-        }
-    }
-
     // ------------------------------------------------------- publish / rollback
 
     @PluginMethod
