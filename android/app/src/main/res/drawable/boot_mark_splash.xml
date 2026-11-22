@@ -8,6 +8,7 @@
     android:viewportWidth="24"
     android:viewportHeight="24">
     <group
+        android:name="splash_mark"
         android:scaleX="0.35"
         android:scaleY="0.35"
         android:translateX="7.8"

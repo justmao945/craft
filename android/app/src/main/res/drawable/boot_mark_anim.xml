@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Animated launch icon: the mark grows in over 600ms on the system splash.
+     The platform plays this automatically while the splash window is visible. -->
+<animated-vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:drawable="@drawable/boot_mark_splash">
+    <target
+        android:name="splash_mark"
+        android:animation="@animator/boot_mark_grow" />
+</animated-vector>
