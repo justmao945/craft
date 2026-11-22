@@ -12,6 +12,11 @@ export interface Snapshot {
   buildId?: string
 }
 
+export interface StorageStatus {
+  granted: boolean
+  path: string
+}
+
 export interface Workspace {
   gift: Gift
   files: Record<string, string>

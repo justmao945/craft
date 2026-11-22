@@ -1,7 +1,9 @@
 import { registerPlugin } from '@capacitor/core'
-import type { AgentConfig, BuildArtifact, ChatMessage, Gift, SessionState, Snapshot, Workspace } from '../types'
+import type { AgentConfig, BuildArtifact, ChatMessage, Gift, SessionState, Snapshot, StorageStatus, Workspace } from '../types'
 
 interface CraftGiftPlugin {
+  getStorageStatus(): Promise<StorageStatus>
+  requestStorageAccess(): Promise<{ ok: boolean }>
   listGifts(): Promise<{ gifts: Gift[] }>
   createGift(options: { name: string }): Promise<{ gift: Gift }>
   deleteGift(options: { giftId: string }): Promise<{ ok: boolean }>
@@ -83,6 +85,14 @@ function assertPath(path: string): void {
 
 /** Android-native Gift storage; every method rejects on native errors. */
 export const giftStore = {
+  async getStorageStatus(): Promise<StorageStatus> {
+    return project.getStorageStatus()
+  },
+
+  async requestStorageAccess(): Promise<void> {
+    await project.requestStorageAccess()
+  },
+
   async listGifts(): Promise<Gift[]> {
     return (await project.listGifts()).gifts
   },

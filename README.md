@@ -6,7 +6,7 @@ Craft 是一个 Android 端的「自生长」宿主应用：不产出独立 APK�
 
 ## 已实现
 
-- Craft 主工作区：顶栏切换作品 / 通用会话，底部为工坊、作品、广场、我的
+- Craft 主工作区：工坊为两层会话列表 / 聊天详情，通用会话置顶；底部为工坊、作品、广场、我的
 - 每个作品只有一个项目会话；通用会话有独立固定工作目录，用于问答、草稿和普通文件
 - 通用会话的聊天记录、完整模型上下文、文件和未发送草稿均持久化，可在后续版本叠加记忆功能
 - 聊天式工作区、模板广场、Gift 列表（两段确认删除）与个人设置
@@ -23,23 +23,23 @@ Craft 是一个 Android 端的「自生长」宿主应用：不产出独立 APK�
 
 ## 持久化设计
 
-所有数据位于应用私有目录，全部原生实现，无浏览器适配层：
+所有数据位于系统共享目录 `/storage/emulated/0/Documents/Craft/`，全部原生实现，无浏览器适配层。卸载 App 不会删除该目录；只有用户手动删除文件，或在 App 内明确删除某个作品时才会移除对应数据。Android 11 及以上需要用户在系统设置中授予「所有文件访问」，Android 10 及以下使用存储运行时权限。旧版本的应用私有 `<filesDir>/craft/` 数据会在授权后自动复制到共享目录，不覆盖已有文件，也不自动删除旧副本。重装后原 API Key 密文无法由新 Keystore 密钥解密，需要在模型设置中重新填写。
 
 ```text
-<filesDir>/craft/gifts.json                        Gift 注册表
-<filesDir>/craft/<giftId>/workspace/**             源码（git 仓库，.git 对 agent 不可见）
-<filesDir>/craft/<giftId>/snapshots/<commit>/meta.json  { id, message, createdAt, buildId? }
-<filesDir>/craft/<giftId>/builds/<id>/{app.js,app.css}  不可变构建产物
-<filesDir>/craft/<giftId>/draft.json / release.json     Draft / Release 指针
-<filesDir>/craft/<giftId>/conversation.json        UI 会话（user/assistant 展示记录）
-<filesDir>/craft/<giftId>/context.jsonl            完整模型上下文（含 tool 调用与 reasoning）
-<filesDir>/craft/<giftId>/context-archive-<ts>.jsonl    每次压缩新建一份原始归档
-<filesDir>/craft/.general/workspace/**                通用会话固定工作目录（草稿与普通文件）
-<filesDir>/craft/.general/conversation.json           通用会话聊天记录
-<filesDir>/craft/.general/context.jsonl               通用会话完整模型上下文
-<filesDir>/craft/.general/context-archive-<ts>.jsonl   通用会话压缩归档
-<filesDir>/craft/session.json                      { activeGiftId, activeTab, language, drafts }
-<filesDir>/craft/agent-config.json                 模型配置（apiKey 加密）
+Documents/Craft/gifts.json                        Gift 注册表
+Documents/Craft/<giftId>/workspace/**             源码（git 仓库，.git 对 agent 不可见）
+Documents/Craft/<giftId>/snapshots/<commit>/meta.json  { id, message, createdAt, buildId? }
+Documents/Craft/<giftId>/builds/<id>/{app.js,app.css}  不可变构建产物
+Documents/Craft/<giftId>/draft.json / release.json     Draft / Release 指针
+Documents/Craft/<giftId>/conversation.json        UI 会话（user/assistant 展示记录）
+Documents/Craft/<giftId>/context.jsonl            完整模型上下文（含 tool 调用与 reasoning）
+Documents/Craft/<giftId>/context-archive-<ts>.jsonl    每次压缩新建一份原始归档
+Documents/Craft/.general/workspace/**                通用会话固定工作目录（草稿与普通文件）
+Documents/Craft/.general/conversation.json           通用会话聊天记录
+Documents/Craft/.general/context.jsonl               通用会话完整模型上下文
+Documents/Craft/.general/context-archive-<ts>.jsonl   通用会话压缩归档
+Documents/Craft/session.json                      { activeGiftId, activeTab, language, drafts }
+Documents/Craft/agent-config.json                 模型配置（apiKey 加密）
 ```
 
 仅内存保存：运行中状态、确认弹窗、Preview 前台状态（可由 draft/release 指针重建）。通用会话与作品均持久化；删除作品只级联删除该作品的产物，不影响通用会话。

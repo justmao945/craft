@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import {
-  ArrowLeft, ArrowUp, BarChart3, Blocks, BookOpen, CalendarCheck2, Check, ChevronDown, ChevronRight, CircleUserRound,
+  ArrowLeft, ArrowUp, BarChart3, Blocks, BookOpen, CalendarCheck2, Check, ChevronRight, CircleUserRound,
   Clock3, Compass, FlaskConical, FolderGit2, GlassWater, Languages, LayoutGrid, Lightbulb,
-  LoaderCircle, Map, MessageCircle, MessageSquarePlus, MoreHorizontal, NotebookPen, Play, Plus, Rocket,
+  LoaderCircle, Map, MessageCircle, MoreHorizontal, NotebookPen, Pin, Play, Plus, Rocket, Search,
   Settings2, ShieldCheck, Sparkles, Timer, Trash2, X,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
@@ -12,7 +12,7 @@ import { generalStore, giftStore, runtime } from './native/craft'
 import { createOfflineTodo } from './sample'
 import { detectLanguage, translate } from './i18n'
 import type { Language, MessageKey } from './i18n'
-import type { AgentConfig, ChatMessage, Gift, SessionState, Snapshot } from './types'
+import type { AgentConfig, ChatMessage, Gift, SessionState, Snapshot, StorageStatus } from './types'
 import './styles.css'
 
 type Tab = 'craft' | 'gifts' | 'discover' | 'profile'
@@ -60,13 +60,22 @@ function welcomeMessage(language: Language): ChatMessage {
   return { id: 'welcome', role: 'assistant', createdAt: Date.now(), text: translate(language, 'welcome.subtitle') }
 }
 
+function conversationPreview(messages: ChatMessage[] | undefined, fallback: string): string {
+  const latest = messages?.filter((message) => message.role !== 'status').at(-1)
+  return latest && latest.id !== 'welcome' ? latest.text : fallback
+}
+
 export default function App() {
   const [gifts, setGifts] = useState<Gift[]>([])
   const [activeTab, setActiveTab] = useState<Tab>('craft')
   const [discoverCategory, setDiscoverCategory] = useState<(typeof categories)[number]>('all')
   const [notice, setNotice] = useState('')
+  const [today] = useState(() => new Date().toDateString())
+  const [storageStatus, setStorageStatus] = useState<StorageStatus>()
+  const [storageError, setStorageError] = useState('')
   const [language, setLanguage] = useState<Language>(detectLanguage)
   const [messages, setMessages] = useState<ChatMessage[]>(() => [welcomeMessage(detectLanguage())])
+  const [generalMessages, setGeneralMessages] = useState<ChatMessage[]>(messages)
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState('')
@@ -74,7 +83,9 @@ export default function App() {
   const [config, setConfig] = useState<AgentConfig>({ apiKey: '', baseUrl: '', model: '', reasoningEffort: 'high' })
   const [activeGiftId, setActiveGiftId] = useState<string>()
   const [creatingGift, setCreatingGift] = useState(false)
-  const [workspaceOpen, setWorkspaceOpen] = useState(false)
+  const [conversationOpen, setConversationOpen] = useState(false)
+  const [conversationPreviews, setConversationPreviews] = useState<Record<string, ChatMessage[]>>({})
+  const [giftQuery, setGiftQuery] = useState('')
   const [toolsOpen, setToolsOpen] = useState(false)
   const [versions, setVersions] = useState<Snapshot[]>([])
   const [versionsOpen, setVersionsOpen] = useState(false)
@@ -108,6 +119,7 @@ export default function App() {
     if (activeGiftIdRef.current) void giftStore.saveConversation(activeGiftIdRef.current, next)
     else if (!creatingGiftRef.current) {
       generalMessagesRef.current = next
+      setGeneralMessages(next)
       void generalStore.saveConversation(next)
     }
   }, [])
@@ -185,8 +197,8 @@ export default function App() {
     messagesRef.current = next
     setMessages(next)
     setInput(sessionRef.current.drafts[gift.id] ?? '')
-    setWorkspaceOpen(false)
     setToolsOpen(false)
+    setConversationOpen(true)
     await getAgent(gift)
     setActiveTab('craft')
   }, [busy, getAgent, language])
@@ -200,12 +212,13 @@ export default function App() {
     setActiveGiftId(undefined)
     setCreatingGift(false)
     generalMessagesRef.current = next
+    setGeneralMessages(next)
     messagesRef.current = next
     setMessages(next)
     setInput(sessionRef.current.drafts[GENERAL_SESSION_KEY] ?? '')
-    setWorkspaceOpen(false)
     setToolsOpen(false)
     setActiveTab('craft')
+    setConversationOpen(true)
     await getAgent(undefined, 'general')
   }, [busy, getAgent, language])
 
@@ -220,12 +233,34 @@ export default function App() {
     messagesRef.current = welcome
     setMessages(welcome)
     setInput(sessionRef.current.drafts[''] ?? '')
-    setWorkspaceOpen(false)
     setToolsOpen(false)
     setActiveTab('craft')
+    setConversationOpen(true)
   }, [busy, language])
 
+  const checkStorage = useCallback(async () => {
+    try {
+      setStorageStatus(await giftStore.getStorageStatus())
+      setStorageError('')
+    } catch (error) {
+      setStorageError(error instanceof Error ? error.message : String(error))
+    }
+  }, [])
+
   useEffect(() => {
+    if (storageStatus?.granted) return
+    const initial = window.setTimeout(() => void checkStorage(), 0)
+    const interval = window.setInterval(() => void checkStorage(), 1000)
+    window.addEventListener('focus', checkStorage)
+    return () => {
+      window.clearTimeout(initial)
+      window.clearInterval(interval)
+      window.removeEventListener('focus', checkStorage)
+    }
+  }, [checkStorage, storageStatus?.granted])
+
+  useEffect(() => {
+    if (!storageStatus?.granted) return
     let active = true
     void (async () => {
       const [initialGifts, initialConfig, session, generalHistory] = await Promise.all([
@@ -251,6 +286,7 @@ export default function App() {
       } else {
         const next = generalHistory.length ? generalHistory : [welcomeMessage(session.language ?? detectLanguage())]
         generalMessagesRef.current = next
+        setGeneralMessages(next)
         messagesRef.current = next
         setMessages(next)
         await getAgent(undefined, 'general')
@@ -258,7 +294,7 @@ export default function App() {
       if (active) setInput(session.drafts[restored?.id ?? GENERAL_SESSION_KEY] ?? '')
     })()
     return () => { active = false }
-  }, [getAgent])
+  }, [getAgent, storageStatus?.granted])
 
   useEffect(() => {
     sessionRef.current.activeTab = activeTab
@@ -287,16 +323,15 @@ export default function App() {
   }, [notice])
 
   useEffect(() => {
-    if (!toolsOpen && !workspaceOpen && !versionsOpen) return
+    if (!toolsOpen && !versionsOpen) return
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return
       setToolsOpen(false)
-      setWorkspaceOpen(false)
       setVersionsOpen(false)
     }
     window.addEventListener('keydown', closeOnEscape)
     return () => window.removeEventListener('keydown', closeOnEscape)
-  }, [toolsOpen, workspaceOpen, versionsOpen])
+  }, [toolsOpen, versionsOpen])
 
   useEffect(() => {
     const composer = composerRef.current
@@ -312,6 +347,15 @@ export default function App() {
   useEffect(() => {
     if (activeGiftId && versionsOpen) void giftStore.listSnapshots(activeGiftId).then(setVersions)
   }, [activeGiftId, versionsOpen])
+
+  useEffect(() => {
+    if (activeTab !== 'craft' || conversationOpen || gifts.length === 0) return
+    let active = true
+    void Promise.all(gifts.map(async (gift) => [gift.id, await giftStore.getConversation(gift.id)] as const)).then((entries) => {
+      if (active) setConversationPreviews(Object.fromEntries(entries))
+    })
+    return () => { active = false }
+  }, [activeTab, conversationOpen, gifts])
 
   const send = async (event: FormEvent) => {
     event.preventDefault()
@@ -333,8 +377,8 @@ export default function App() {
 
   const runOfflineCheck = async () => {
     setActiveTab('craft')
+    setConversationOpen(true)
     setToolsOpen(false)
-    setWorkspaceOpen(false)
     setBusy(true)
     setStatus(OFFLINE_STATUS)
     try {
@@ -397,14 +441,17 @@ export default function App() {
         creatingGiftRef.current = false
         setActiveGiftId(undefined)
         setCreatingGift(false)
+        setConversationOpen(false)
         const history = await generalStore.getConversation()
         const next = history.length ? history : [welcomeMessage(language)]
         generalMessagesRef.current = next
+        setGeneralMessages(next)
         messagesRef.current = next
         setMessages(next)
         setInput(sessionRef.current.drafts[GENERAL_SESSION_KEY] ?? '')
       }
       setDeleteCandidate(undefined)
+      setToolsOpen(false)
       await refreshGifts()
       setNotice(t('notice.deleted', { name: gift.name }))
     } catch (error) {
@@ -421,6 +468,19 @@ export default function App() {
     ? t('composer.giftPlaceholder')
     : creatingGift ? t('composer.placeholder') : t('composer.generalPlaceholder')
   const filteredInspirations = discoverCategory === 'all' ? inspirations : inspirations.filter((item) => item.category === discoverCategory)
+  const normalizedGiftQuery = giftQuery.trim().toLocaleLowerCase(locale)
+  const filteredGifts = normalizedGiftQuery
+    ? gifts.filter((gift) => gift.name.toLocaleLowerCase(locale).includes(normalizedGiftQuery))
+    : gifts
+  const generalPreview = conversationPreview(generalMessages, t('workspace.generalHint'))
+  const generalLastMessage = generalMessages.at(-1)
+  const generalUpdatedAt = generalLastMessage?.id === 'welcome' ? undefined : generalLastMessage?.createdAt
+  const formatListTime = (timestamp: number) => {
+    const date = new Date(timestamp)
+    return new Intl.DateTimeFormat(locale, date.toDateString() === today
+      ? { hour: '2-digit', minute: '2-digit' }
+      : { month: 'short', day: 'numeric' }).format(date)
+  }
   const subagentStatus = status.startsWith('Subagent: ')
   const baseStatus = subagentStatus ? status.slice('Subagent: '.length) : status
   const statusText = (subagentStatus ? t('status.subagent') : '') + (
@@ -446,19 +506,61 @@ export default function App() {
     void openGift(gift).then(() => setNotice(t('notice.switched', { name: gift.name })))
   }
 
+  const requestSharedStorage = async () => {
+    try {
+      await giftStore.requestStorageAccess()
+      await checkStorage()
+    } catch (error) {
+      setStorageError(error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  if (!storageStatus?.granted) return <div className="app-shell">
+    <main className="screen storage-screen">
+      <CraftMark size="large" />
+      <h1>{t('storage.title')}</h1>
+      <p>{t('storage.body')}</p>
+      {storageStatus?.path && <code>{storageStatus.path}</code>}
+      {storageError && <p className="storage-error" role="alert">{storageError}</p>}
+      <button className="primary-button" onClick={() => void requestSharedStorage()}>{t('storage.authorize')}<ChevronRight size={18} /></button>
+      <small>{t('storage.hint')}</small>
+    </main>
+  </div>
+
   return <div className="app-shell">
-    {!settingsOpen && activeTab === 'craft' && <main className="screen craft-screen">
-      <header className="workspace-header">
-        <button className="workspace-selector" disabled={busy} onClick={() => setWorkspaceOpen(true)} aria-haspopup="dialog">
-          <span className={`workspace-symbol ${activeGift || creatingGift ? 'gift' : ''}`}>
-            {activeGift ? <Blocks size={19} /> : creatingGift ? <Plus size={20} /> : <MessageCircle size={19} />}
+    {!settingsOpen && activeTab === 'craft' && !conversationOpen && <main className="screen tab-screen craft-list-screen">
+      <header className="section-header">
+        <div><h1>{t('nav.craft')}</h1><p>{t('craft.conversationsHint')}</p></div>
+        <button className="section-action" aria-label={t('menu.more')} aria-expanded={toolsOpen} disabled={busy} onClick={() => setToolsOpen(true)}><MoreHorizontal size={22} /></button>
+      </header>
+      <section className="conversation-list" aria-label={t('craft.conversations')}>
+        <button className="conversation-row pinned" disabled={busy} onClick={() => void openGeneral()}>
+          <span className="conversation-avatar general"><MessageCircle size={23} /></span>
+          <span className="conversation-row-main">
+            <span className="conversation-row-title"><strong>{t('workspace.general')}<Pin size={12} /></strong>{generalUpdatedAt && <time>{formatListTime(generalUpdatedAt)}</time>}</span>
+            <small>{generalPreview}</small>
           </span>
-          <span className="workspace-copy">
-            <strong>{activeGift?.name ?? (creatingGift ? t('workspace.newGift') : t('workspace.general'))}</strong>
-            <small>{activeGift ? (activeGift.releaseSnapshotId ? t('gift.published') : t('gift.developing')) : creatingGift ? t('workspace.newGiftHint') : t('workspace.generalHint')}</small>
-          </span>
-          <ChevronDown className="workspace-chevron" size={16} />
         </button>
+        {gifts.map((gift, index) => <button className="conversation-row" key={gift.id} disabled={busy} onClick={() => continueGift(gift)}>
+          <span className={`conversation-avatar tone-${index % 4}`}><Blocks size={23} /></span>
+          <span className="conversation-row-main">
+            <span className="conversation-row-title"><strong>{gift.name}</strong><time>{formatListTime(gift.updatedAt)}</time></span>
+            <small>{conversationPreview(conversationPreviews[gift.id], gift.releaseSnapshotId ? t('gift.published') : t('gift.developing'))}</small>
+          </span>
+        </button>)}
+      </section>
+    </main>}
+
+    {!settingsOpen && activeTab === 'craft' && conversationOpen && <main className="screen craft-screen">
+      <header className="workspace-header conversation-header">
+        <button className="conversation-back" aria-label={t('craft.back')} disabled={busy} onClick={() => { setConversationOpen(false); setToolsOpen(false) }}><ArrowLeft size={22} /></button>
+        <span className={`workspace-symbol ${activeGift || creatingGift ? 'gift' : ''}`}>
+          {activeGift ? <Blocks size={19} /> : creatingGift ? <Plus size={20} /> : <MessageCircle size={19} />}
+        </span>
+        <span className="workspace-copy">
+          <strong>{activeGift?.name ?? (creatingGift ? t('workspace.newGift') : t('workspace.general'))}</strong>
+          <small>{activeGift ? (activeGift.releaseSnapshotId ? t('gift.published') : t('gift.developing')) : creatingGift ? t('workspace.newGiftHint') : t('workspace.generalHint')}</small>
+        </span>
         <button className="workspace-more" aria-label={t('menu.more')} aria-expanded={toolsOpen} disabled={busy} onClick={() => setToolsOpen(true)}>
           <MoreHorizontal size={23} />
         </button>
@@ -534,33 +636,27 @@ export default function App() {
     {!settingsOpen && activeTab === 'gifts' && <main className="screen tab-screen gifts-screen">
       <header className="section-header">
         <div><h1>{t('gifts.title')}</h1><p>{t('gifts.subtitle')}</p></div>
-        <button className="section-action" aria-label={t('gifts.new')} disabled={busy} onClick={newGift}><Plus size={21} /></button>
+        <button className="section-action" aria-label={t('menu.manageGifts')} aria-expanded={toolsOpen} disabled={busy} onClick={() => setToolsOpen(true)}><MoreHorizontal size={22} /></button>
       </header>
+      <label className="gift-search"><Search size={18} /><input type="search" aria-label={t('gifts.search')} placeholder={t('gifts.search')} value={giftQuery} onChange={(event) => setGiftQuery(event.target.value)} /></label>
       {gifts.length === 0 ? <div className="empty-gifts">
         <span><Lightbulb size={29} /></span><h2>{t('empty.title')}</h2><p>{t('empty.body')}</p>
         <button className="primary-button" onClick={() => startPrompt('')}>{t('empty.cta')}<ArrowUp size={17} /></button>
-      </div> : <section className="gift-list" aria-label={t('gifts.aria')}>
-        {gifts.map((gift, index) => <article className={`gift-row ${activeGiftId === gift.id ? 'current' : ''}`} key={gift.id}>
-          <button className="gift-open" disabled={busy} onClick={() => continueGift(gift)}>
-            <span className={`gift-icon tone-${index % 4}`}><Blocks size={22} /></span>
-            <span className="gift-info">
-              <span className="gift-title"><strong>{gift.name}</strong>{activeGiftId === gift.id && <em>{t('gift.current')}</em>}</span>
-              <small><i className={gift.releaseSnapshotId ? 'published' : ''} />{gift.releaseSnapshotId ? t('gift.published') : t('gift.developing')} · {new Intl.DateTimeFormat(locale, { month: 'short', day: 'numeric' }).format(gift.updatedAt)}</small>
-            </span>
-            <ChevronRight className="gift-chevron" size={17} />
-          </button>
-          {gift.releaseSnapshotId && <button className="gift-launch" aria-label={t('gift.openRelease', { name: gift.name })} onClick={() => void runtime.openRelease(gift.id, gift.name)}><Play size={17} /></button>}
-          <button className={`gift-delete ${deleteCandidate === gift.id ? 'confirming' : ''}`} aria-label={t('gift.delete', { name: gift.name })} disabled={busy} onClick={() => void deleteGift(gift)}>
-            {deleteCandidate === gift.id ? t('gift.deleteConfirm') : <Trash2 size={17} />}
-          </button>
-        </article>)}
+      </div> : filteredGifts.length === 0 ? <div className="gift-search-empty"><Search size={24} /><p>{t('gifts.noResults')}</p></div> : <section className="gift-list" aria-label={t('gifts.aria')}>
+        {filteredGifts.map((gift, index) => <button className={`gift-row ${activeGiftId === gift.id ? 'current' : ''}`} key={gift.id} disabled={busy} onClick={() => continueGift(gift)}>
+          <span className={`gift-icon tone-${index % 4}`}><Blocks size={22} /></span>
+          <span className="gift-info">
+            <span className="gift-title"><strong>{gift.name}</strong>{activeGiftId === gift.id && <em>{t('gift.current')}</em>}</span>
+            <small><i className={gift.releaseSnapshotId ? 'published' : ''} />{gift.releaseSnapshotId ? t('gift.published') : t('gift.developing')} · {new Intl.DateTimeFormat(locale, { month: 'short', day: 'numeric' }).format(gift.updatedAt)}</small>
+          </span>
+          <ChevronRight className="gift-chevron" size={17} />
+        </button>)}
       </section>}
     </main>}
 
     {!settingsOpen && activeTab === 'profile' && <main className="screen tab-screen profile-screen">
       <header className="section-header"><div><h1>{t('nav.profile')}</h1></div></header>
-      <section className="profile-card"><CraftMark size="large" /><div><h2>{t('profile.title')}</h2><p>{t('profile.summary', { total: gifts.length, published: gifts.filter((gift) => gift.releaseSnapshotId).length })}</p></div></section>
-      <p className="menu-label">{t('profile.settings')}</p>
+      <p className="menu-label profile-menu-label">{t('profile.settings')}</p>
       <section className="settings-list">
         <button onClick={() => setSettingsOpen(true)}><span className="settings-icon"><Sparkles size={19} /></span><span><strong>{t('profile.model')}</strong><small>{config.model || t('profile.modelHint')}</small></span><ChevronRight size={18} /></button>
         <div className="language-row"><span className="settings-icon"><Languages size={19} /></span><span><strong>{t('profile.language')}</strong></span>
@@ -576,53 +672,31 @@ export default function App() {
       </section>
     </main>}
 
-    {!settingsOpen && <nav className="bottom-nav" aria-label={t('nav.craft')}>
+    {!settingsOpen && !conversationOpen && <nav className="bottom-nav" aria-label={t('nav.craft')}>
       {([
         { id: 'craft', label: t('nav.craft'), icon: Sparkles },
         { id: 'gifts', label: t('nav.gifts'), icon: LayoutGrid },
         { id: 'discover', label: t('nav.discover'), icon: Compass },
         { id: 'profile', label: t('nav.profile'), icon: CircleUserRound },
       ] as { id: Tab; label: string; icon: LucideIcon }[]).map(({ id, label, icon: Icon }) => <button key={id} className={activeTab === id ? 'active' : ''} aria-current={activeTab === id ? 'page' : undefined} onClick={() => setActiveTab(id)}>
-        <span><Icon size={22} strokeWidth={activeTab === id ? 2.3 : 1.8} /></span><small>{label}</small>
+        <span><Icon size={22} strokeWidth={1.9} /></span><small>{label}</small>
       </button>)}
     </nav>}
 
     {toolsOpen && <>
       <button className="tools-dismiss" aria-label={t('menu.close')} onClick={() => setToolsOpen(false)} />
       <section className="tools-menu" role="menu" aria-label={t('menu.more')}>
-        {activeGift && <>
+        {conversationOpen && activeGift && <>
           <button role="menuitem" onClick={() => { setToolsOpen(false); setVersionsOpen(true) }}><FolderGit2 size={18} /><span>{t('menu.versions')}</span><ChevronRight size={15} /></button>
           {activeGift.releaseSnapshotId && <button role="menuitem" onClick={() => { setToolsOpen(false); void runtime.openRelease(activeGift.id, activeGift.name) }}><Play size={18} /><span>{t('menu.openRelease')}</span><ChevronRight size={15} /></button>}
+          <button className={`danger-menu-item ${deleteCandidate === activeGift.id ? 'confirming' : ''}`} role="menuitem" disabled={busy} onClick={() => void deleteGift(activeGift)}><Trash2 size={18} /><span>{deleteCandidate === activeGift.id ? t('gift.deleteConfirm') : t('gift.delete', { name: activeGift.name })}</span></button>
+          <div className="tools-separator" />
         </>}
-        <button role="menuitem" onClick={() => { setToolsOpen(false); setActiveTab('gifts') }}><LayoutGrid size={18} /><span>{t('menu.manageGifts')}</span><ChevronRight size={15} /></button>
-        <div className="tools-separator" />
-        <button role="menuitem" onClick={() => void openGeneral()}><MessageSquarePlus size={18} /><span>{t('workspace.openGeneral')}</span></button>
         <button role="menuitem" onClick={newGift}><Plus size={19} /><span>{t('workspace.newGiftAction')}</span></button>
-        <div className="tools-separator" />
         <button role="menuitem" onClick={() => void runOfflineCheck()}><FlaskConical size={18} /><span><strong>{t('menu.offline')}</strong><small>{t('menu.offlineHint')}</small></span></button>
         <button role="menuitem" onClick={() => { setToolsOpen(false); setSettingsOpen(true) }}><Settings2 size={18} /><span>{t('menu.modelSettings')}</span><ChevronRight size={15} /></button>
       </section>
     </>}
-
-    {workspaceOpen && <div className="sheet-backdrop" onClick={(event) => { if (event.target === event.currentTarget) setWorkspaceOpen(false) }}>
-      <section className="bottom-sheet workspace-sheet" role="dialog" aria-modal="true" aria-label={t('workspace.switch')}>
-        <div className="sheet-handle" />
-        <header><div><h2>{t('workspace.switch')}</h2><p>{t('workspace.generalHint')}</p></div><button className="round-icon" aria-label={t('menu.close')} onClick={() => setWorkspaceOpen(false)}><X size={19} /></button></header>
-        <div className="workspace-list">
-          <button className={`workspace-option ${!activeGift && !creatingGift ? 'selected' : ''}`} onClick={() => void openGeneral()}>
-            <span className="workspace-option-icon"><MessageCircle size={20} /></span>
-            <span><strong>{t('workspace.general')}</strong><small>{t('workspace.generalHint')}</small></span>
-            {!activeGift && !creatingGift && <Check size={18} />}
-          </button>
-          {gifts.map((gift, index) => <button className={`workspace-option ${activeGiftId === gift.id ? 'selected' : ''}`} key={gift.id} onClick={() => continueGift(gift)}>
-            <span className={`workspace-option-icon tone-${index % 4}`}><Blocks size={20} /></span>
-            <span><strong>{gift.name}</strong><small>{gift.releaseSnapshotId ? t('gift.published') : t('gift.developing')}</small></span>
-            {activeGiftId === gift.id && <Check size={18} />}
-          </button>)}
-        </div>
-        <button className="workspace-create" onClick={newGift}><Plus size={18} />{t('workspace.newGiftAction')}</button>
-      </section>
-    </div>}
 
     {settingsOpen && <main className="screen settings-page">
       <header className="page-header">
@@ -647,7 +721,6 @@ export default function App() {
               <div className="effort-options" role="group" aria-label={t('settings.effort')}>
                 {(['none', 'low', 'high', 'max'] as const).map((option) => <button key={option} type="button" className={config.reasoningEffort === option ? 'active' : ''} aria-pressed={config.reasoningEffort === option} onClick={() => setConfig({ ...config, reasoningEffort: option })}>{t(`effort.${option}`)}</button>)}
               </div>
-              <p className="settings-help">{t('settings.effortHelp')}</p>
             </div>
           </section>
           <p className="security-note"><ShieldCheck size={15} />{t('settings.keyNote')}</p>

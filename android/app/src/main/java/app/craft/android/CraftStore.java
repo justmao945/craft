@@ -1,6 +1,11 @@
 package app.craft.android;
 
+import android.Manifest;
 import android.content.Context;
+import android.content.pm.PackageManager;
+import android.os.Environment;
+
+import androidx.core.content.ContextCompat;
 
 import org.eclipse.jgit.api.Git;
 import org.eclipse.jgit.api.errors.GitAPIException;
@@ -27,22 +32,25 @@ import java.util.Locale;
 import java.util.UUID;
 
 /**
- * File-backed storage for Craft gifts, all under the app-private files dir:
+ * File-backed storage for Craft gifts, all under the public Documents directory:
  *
- *   <filesDir>/craft/gifts.json                       gift registry
- *   <filesDir>/craft/<giftId>/workspace/**             live workspace source files (git repo)
- *   <filesDir>/craft/<giftId>/snapshots/<id>/meta.json { id, message, createdAt, buildId? }
- *   <filesDir>/craft/<giftId>/builds/<id>/{app.js,app.css}  immutable builds
- *   <filesDir>/craft/<giftId>/draft.json               { buildId }
- *   <filesDir>/craft/<giftId>/release.json             { buildId }
- *   <filesDir>/craft/<giftId>/conversation.json        single Gift-scoped conversation history
- *   <filesDir>/craft/<giftId>/context.jsonl            full model transcript (JSONL, lossless)
- *   <filesDir>/craft/<giftId>/context-archive-<ts>.jsonl  pre-compaction raw transcripts
- *   <filesDir>/craft/.general/workspace/**             persistent general drafts and files
- *   <filesDir>/craft/.general/conversation.json        general conversation history
- *   <filesDir>/craft/.general/context.jsonl            general full model transcript
- *   <filesDir>/craft/session.json                     UI session: last project/tab, composer drafts
- *   <filesDir>/craft/agent-config.json                { apiKey(encrypted), baseUrl, model, reasoningEffort }
+ *   Documents/Craft/gifts.json                       gift registry
+ *   Documents/Craft/<giftId>/workspace/**             live workspace source files (git repo)
+ *   Documents/Craft/<giftId>/snapshots/<id>/meta.json { id, message, createdAt, buildId? }
+ *   Documents/Craft/<giftId>/builds/<id>/{app.js,app.css}  immutable builds
+ *   Documents/Craft/<giftId>/draft.json               { buildId }
+ *   Documents/Craft/<giftId>/release.json             { buildId }
+ *   Documents/Craft/<giftId>/conversation.json        single Gift-scoped conversation history
+ *   Documents/Craft/<giftId>/context.jsonl            full model transcript (JSONL, lossless)
+ *   Documents/Craft/<giftId>/context-archive-<ts>.jsonl  pre-compaction raw transcripts
+ *   Documents/Craft/.general/workspace/**             persistent general drafts and files
+ *   Documents/Craft/.general/conversation.json        general conversation history
+ *   Documents/Craft/.general/context.jsonl            general full model transcript
+ *   Documents/Craft/session.json                     UI session: last project/tab, composer drafts
+ *   Documents/Craft/agent-config.json                { apiKey(encrypted), baseUrl, model, reasoningEffort }
+ *
+ * Shared files survive uninstall and are never deleted by Craft except for an explicit Gift deletion.
+ * Legacy <filesDir>/craft data is copied without overwriting existing shared files after authorization.
  */
 public class CraftStore {
 
@@ -126,11 +134,33 @@ public class CraftStore {
     private final File rootDir;
 
     public CraftStore(Context context) {
-        rootDir = new File(context.getFilesDir(), "craft");
-        if (!rootDir.exists()) {
+        rootDir = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS), "Craft");
+        if (hasStorageAccess(context) && !rootDir.exists()) {
             //noinspection ResultOfMethodCallIgnored
             rootDir.mkdirs();
         }
+    }
+
+    public static boolean hasStorageAccess(Context context) {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+            return Environment.isExternalStorageManager();
+        }
+        return ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                == PackageManager.PERMISSION_GRANTED;
+    }
+
+    public String rootPath() {
+        return rootDir.getAbsolutePath();
+    }
+
+    /** One-way, non-destructive upgrade from app-private storage; safe to retry after an interrupted copy. */
+    public synchronized void migrateLegacyData(Context context) throws IOException {
+        File legacyRoot = new File(context.getFilesDir(), "craft");
+        if (!legacyRoot.isDirectory()) return;
+        if (!rootDir.exists() && !rootDir.mkdirs()) {
+            throw new IOException("Could not create shared storage directory: " + rootDir);
+        }
+        copyMissing(legacyRoot, rootDir);
     }
 
     // ------------------------------------------------------------------ gifts
@@ -836,7 +866,12 @@ public class CraftStore {
         String encrypted = config.optString("apiKey", "");
         String apiKey = "";
         if (!encrypted.isEmpty()) {
-            apiKey = AgentCrypto.decrypt(encrypted);
+            try {
+                apiKey = AgentCrypto.decrypt(encrypted);
+            } catch (GeneralSecurityException error) {
+                // The shared ciphertext survives uninstall, but its Android Keystore key does not.
+                apiKey = "";
+            }
         }
         out.put("apiKey", apiKey);
 
@@ -866,6 +901,60 @@ public class CraftStore {
     }
 
     // --------------------------------------------------------------- io
+
+    private static void copyMissing(File source, File target) throws IOException {
+        if (source.isDirectory()) {
+            if (!target.exists()) {
+                File temp = new File(target.getParentFile(), target.getName() + ".migrate-" + UUID.randomUUID());
+                try {
+                    copyTree(source, temp);
+                    if (!temp.renameTo(target)) throw new IOException("Could not move migrated data into " + target);
+                } finally {
+                    if (temp.exists()) deleteRecursively(temp);
+                }
+                return;
+            }
+            if (!target.isDirectory()) return; // Never replace an existing shared file.
+            File[] children = source.listFiles();
+            if (children != null) {
+                for (File child : children) copyMissing(child, new File(target, child.getName()));
+            }
+            return;
+        }
+        if (target.exists()) return;
+        File parent = target.getParentFile();
+        if (parent != null && !parent.exists() && !parent.mkdirs()) {
+            throw new IOException("Could not create migration directory: " + parent);
+        }
+        File temp = new File(parent, target.getName() + ".migrate-" + UUID.randomUUID());
+        try (FileInputStream input = new FileInputStream(source); FileOutputStream output = new FileOutputStream(temp)) {
+            byte[] buffer = new byte[8192];
+            int count;
+            while ((count = input.read(buffer)) != -1) output.write(buffer, 0, count);
+            output.getFD().sync();
+            if (!temp.renameTo(target)) throw new IOException("Could not move migrated file into " + target);
+        } finally {
+            if (temp.exists()) //noinspection ResultOfMethodCallIgnored
+                temp.delete();
+        }
+    }
+
+    private static void copyTree(File source, File target) throws IOException {
+        if (source.isDirectory()) {
+            if (!target.mkdirs()) throw new IOException("Could not create migration directory: " + target);
+            File[] children = source.listFiles();
+            if (children != null) {
+                for (File child : children) copyTree(child, new File(target, child.getName()));
+            }
+            return;
+        }
+        try (FileInputStream input = new FileInputStream(source); FileOutputStream output = new FileOutputStream(target)) {
+            byte[] buffer = new byte[8192];
+            int count;
+            while ((count = input.read(buffer)) != -1) output.write(buffer, 0, count);
+            output.getFD().sync();
+        }
+    }
 
     private static void atomicWriteString(File target, String content) throws IOException {
         File parent = target.getParentFile();
