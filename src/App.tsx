@@ -249,7 +249,7 @@ export default function App() {
   useEffect(() => {
     if (storageStatus?.granted) return
     const initial = window.setTimeout(() => void checkStorage(), 0)
-    const interval = window.setInterval(() => void checkStorage(), 1000)
+    const interval = window.setInterval(() => void checkStorage(), 100)
     window.addEventListener('focus', checkStorage)
     return () => {
       window.clearTimeout(initial)
