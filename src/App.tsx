@@ -96,11 +96,12 @@ export default function App() {
   const sessionRef = useRef<SessionState>({ drafts: {} })
   const sessionReady = useRef(false)
 
-  // First committed frame of any branch (splash, gate or main UI) hides the
-  // Capacitor launch splash; no-op in the browser where the plugin is absent.
+  // Hide the launch splash only when the first real content is committed (settled
+  // storage status or a hard error), so the fade never reveals an intermediate screen.
   useEffect(() => {
-    void SplashScreen.hide({ fadeOutDuration: 200 }).catch(() => {})
-  }, [])
+    if (storageStatus === undefined && !storageError) return
+    void SplashScreen.hide({ fadeOutDuration: 0 }).catch(() => {})
+  }, [storageStatus, storageError])
   // Keep refs in lockstep with state: agent hooks and persistence run outside render.
   const messagesRef = useRef<ChatMessage[]>(messages)
   const generalMessagesRef = useRef<ChatMessage[]>(messages)

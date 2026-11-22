@@ -4,8 +4,8 @@
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
     <item android:drawable="@color/boot_bg" />
     <item
-        android:width="54dp"
-        android:height="54dp"
+        android:width="96dp"
+        android:height="96dp"
         android:drawable="@drawable/boot_mark"
         android:gravity="center" />
 </layer-list>
