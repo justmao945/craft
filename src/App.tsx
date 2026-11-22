@@ -498,6 +498,12 @@ export default function App() {
     }
   }
 
+  // Storage state unknown on cold start: show a quiet splash instead of flashing the
+  // authorize gate for the bridge round-trip. Gate only for a settled "not granted".
+  if (!storageStatus && !storageError) return <div className="app-shell">
+    <main className="screen storage-screen"><CraftMark size="large" /></main>
+  </div>
+
   if (!storageStatus?.granted) return <div className="app-shell">
     <main className="screen storage-screen">
       <CraftMark size="large" />
