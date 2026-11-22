@@ -7,7 +7,20 @@
     <title>Craft</title>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root"><div id="boot-splash">
+      <div class="boot-mark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 22V7a1 1 0 0 0-1-1H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5a1 1 0 0 0-1-1H2"/><rect x="14" y="2" width="8" height="8" rx="1"/></svg></div>
+      <div class="boot-dots"><i></i><i></i><i></i></div>
+    </div></div>
+    <style>
+      #boot-splash { position: fixed; inset: 0; display: grid; place-content: center; justify-items: center; gap: 18px; background: #f8f9fc; }
+      .boot-mark { display: grid; place-items: center; width: 54px; height: 54px; border-radius: 17px; background: #5b55e7; color: #fff; box-shadow: 0 5px 14px rgba(91,85,231,.18); }
+      .boot-mark svg { width: 27px; height: 27px; }
+      .boot-dots { display: flex; gap: 7px; }
+      .boot-dots i { width: 7px; height: 7px; border-radius: 50%; background: #b4b1f2; animation: boot-bounce 1s ease-in-out infinite; }
+      .boot-dots i:nth-child(2) { animation-delay: .15s; }
+      .boot-dots i:nth-child(3) { animation-delay: .3s; }
+      @keyframes boot-bounce { 0%, 100% { opacity: .35; transform: translateY(0); } 50% { opacity: 1; transform: translateY(-4px); } }
+    </style>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

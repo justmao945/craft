@@ -18,6 +18,11 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(CraftRuntimePlugin.class);
         super.onCreate(savedInstanceState);
         View webView = getBridge().getWebView();
+        // Transparent until the page paints: the window background (boot icon) shows
+        // through during WebView startup instead of a flat blank backdrop. The page's
+        // own opaque backgrounds (--bg) take over as soon as HTML renders.
+        webView.setBackgroundColor(android.graphics.Color.TRANSPARENT);
+        setTheme(R.style.AppTheme_NoActionBar);
         WindowInsetsControllerCompat systemBars = new WindowInsetsControllerCompat(getWindow(), webView);
         systemBars.setAppearanceLightStatusBars(true);
         systemBars.setAppearanceLightNavigationBars(true);
