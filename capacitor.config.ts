@@ -14,7 +14,9 @@ const config: CapacitorConfig = {
       // The plugin paints the resource as a full-bleed background, so it must be the
       // layered drawable (flat color + centered 54dp mark), not the bare mark vector.
       androidSplashResourceName: 'boot_background',
-      launchFadeOutDuration: 200,
+      // Official Android default is 0: a fade-out exit animation blanks over the
+      // held splash and reads as a flash before the first content frame.
+      launchFadeOutDuration: 0,
       showSpinner: false,
     },
   },
