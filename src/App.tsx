@@ -2,14 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import {
   ArrowLeft, ArrowUp, BarChart3, Blocks, BookOpen, CalendarCheck2, Check, ChevronRight, CircleUserRound,
-  Clock3, Compass, FlaskConical, FolderGit2, GlassWater, Languages, LayoutGrid, Lightbulb,
+  Clock3, Compass, FolderGit2, GlassWater, Languages, LayoutGrid, Lightbulb,
   LoaderCircle, Map, MessageCircle, MoreHorizontal, NotebookPen, Pin, Play, Plus, Rocket, Search,
-  Settings2, ShieldCheck, Sparkles, Timer, Trash2, X,
+  ShieldCheck, Sparkles, Timer, Trash2, X,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { AgentRuntime } from './agent/AgentRuntime'
 import { generalStore, giftStore, runtime } from './native/craft'
-import { createOfflineTodo } from './sample'
 import { detectLanguage, translate } from './i18n'
 import type { Language, MessageKey } from './i18n'
 import type { AgentConfig, ChatMessage, Gift, SessionState, Snapshot, StorageStatus } from './types'
@@ -20,7 +19,6 @@ type AgentMode = 'gift' | 'general'
 
 const NEW_GIFT_KEY = '__new__'
 const GENERAL_SESSION_KEY = '__general__'
-const OFFLINE_STATUS = 'Building the offline Todo validation app'
 const COMPACT_STATUS = 'Compacting earlier context into archive pages'
 
 type InspirationId = 'focus' | 'ledger' | 'habit' | 'travel' | 'words' | 'water'
@@ -375,31 +373,6 @@ export default function App() {
     }
   }
 
-  const runOfflineCheck = async () => {
-    setActiveTab('craft')
-    setConversationOpen(true)
-    setToolsOpen(false)
-    setBusy(true)
-    setStatus(OFFLINE_STATUS)
-    try {
-      const gift = await createOfflineTodo()
-      await refreshGifts()
-      const result: ChatMessage[] = [{ id: crypto.randomUUID(), role: 'assistant', createdAt: Date.now(), text: t('offline.result') }]
-      activeGiftIdRef.current = gift.id
-      creatingGiftRef.current = false
-      setActiveGiftId(gift.id)
-      setCreatingGift(false)
-      messagesRef.current = result
-      setMessages(result)
-      await giftStore.saveConversation(gift.id, result)
-    } catch (error) {
-      addMessage('assistant', error instanceof Error ? error.message : String(error))
-    } finally {
-      setBusy(false)
-      setStatus('')
-    }
-  }
-
   const saveSettings = async (event: FormEvent) => {
     event.preventDefault()
     await giftStore.setAgentConfig(config)
@@ -485,8 +458,7 @@ export default function App() {
   const baseStatus = subagentStatus ? status.slice('Subagent: '.length) : status
   const statusText = (subagentStatus ? t('status.subagent') : '') + (
     baseStatus.startsWith('Agent round') ? t('status.working')
-      : baseStatus === OFFLINE_STATUS ? t('status.offline')
-        : baseStatus === COMPACT_STATUS ? t('status.compacting')
+      : baseStatus === COMPACT_STATUS ? t('status.compacting')
           : t(`status.${baseStatus}` as MessageKey) || baseStatus)
 
   const startPrompt = (prompt: string) => {
@@ -531,7 +503,7 @@ export default function App() {
     {!settingsOpen && activeTab === 'craft' && !conversationOpen && <main className="screen tab-screen craft-list-screen">
       <header className="section-header">
         <div><h1>{t('nav.craft')}</h1><p>{t('craft.conversationsHint')}</p></div>
-        <button className="section-action" aria-label={t('menu.more')} aria-expanded={toolsOpen} disabled={busy} onClick={() => setToolsOpen(true)}><MoreHorizontal size={22} /></button>
+        <button className="workspace-more" aria-label={t('workspace.newGiftAction')} disabled={busy} onClick={newGift}><Plus size={23} /></button>
       </header>
       <section className="conversation-list" aria-label={t('craft.conversations')}>
         <button className="conversation-row pinned" disabled={busy} onClick={() => void openGeneral()}>
@@ -561,9 +533,9 @@ export default function App() {
           <strong>{activeGift?.name ?? (creatingGift ? t('workspace.newGift') : t('workspace.general'))}</strong>
           <small>{activeGift ? (activeGift.releaseSnapshotId ? t('gift.published') : t('gift.developing')) : creatingGift ? t('workspace.newGiftHint') : t('workspace.generalHint')}</small>
         </span>
-        <button className="workspace-more" aria-label={t('menu.more')} aria-expanded={toolsOpen} disabled={busy} onClick={() => setToolsOpen(true)}>
+        {activeGift && <button className="workspace-more" aria-label={t('menu.more')} aria-expanded={toolsOpen} disabled={busy} onClick={() => setToolsOpen(true)}>
           <MoreHorizontal size={23} />
-        </button>
+        </button>}
       </header>
 
       <section className={`conversation ${isWelcome ? 'welcome-conversation' : ''}`}>
@@ -636,17 +608,17 @@ export default function App() {
     {!settingsOpen && activeTab === 'gifts' && <main className="screen tab-screen gifts-screen">
       <header className="section-header">
         <div><h1>{t('gifts.title')}</h1><p>{t('gifts.subtitle')}</p></div>
-        <button className="section-action" aria-label={t('menu.manageGifts')} aria-expanded={toolsOpen} disabled={busy} onClick={() => setToolsOpen(true)}><MoreHorizontal size={22} /></button>
+        <button className="workspace-more" aria-label={t('workspace.newGiftAction')} disabled={busy} onClick={newGift}><Plus size={23} /></button>
       </header>
       <label className="gift-search"><Search size={18} /><input type="search" aria-label={t('gifts.search')} placeholder={t('gifts.search')} value={giftQuery} onChange={(event) => setGiftQuery(event.target.value)} /></label>
       {gifts.length === 0 ? <div className="empty-gifts">
         <span><Lightbulb size={29} /></span><h2>{t('empty.title')}</h2><p>{t('empty.body')}</p>
         <button className="primary-button" onClick={() => startPrompt('')}>{t('empty.cta')}<ArrowUp size={17} /></button>
       </div> : filteredGifts.length === 0 ? <div className="gift-search-empty"><Search size={24} /><p>{t('gifts.noResults')}</p></div> : <section className="gift-list" aria-label={t('gifts.aria')}>
-        {filteredGifts.map((gift, index) => <button className={`gift-row ${activeGiftId === gift.id ? 'current' : ''}`} key={gift.id} disabled={busy} onClick={() => continueGift(gift)}>
+        {filteredGifts.map((gift, index) => <button className="gift-row" key={gift.id} disabled={busy} onClick={() => continueGift(gift)}>
           <span className={`gift-icon tone-${index % 4}`}><Blocks size={22} /></span>
           <span className="gift-info">
-            <span className="gift-title"><strong>{gift.name}</strong>{activeGiftId === gift.id && <em>{t('gift.current')}</em>}</span>
+            <span className="gift-title"><strong>{gift.name}</strong></span>
             <small><i className={gift.releaseSnapshotId ? 'published' : ''} />{gift.releaseSnapshotId ? t('gift.published') : t('gift.developing')} · {new Intl.DateTimeFormat(locale, { month: 'short', day: 'numeric' }).format(gift.updatedAt)}</small>
           </span>
           <ChevronRight className="gift-chevron" size={17} />
@@ -690,11 +662,7 @@ export default function App() {
           <button role="menuitem" onClick={() => { setToolsOpen(false); setVersionsOpen(true) }}><FolderGit2 size={18} /><span>{t('menu.versions')}</span><ChevronRight size={15} /></button>
           {activeGift.releaseSnapshotId && <button role="menuitem" onClick={() => { setToolsOpen(false); void runtime.openRelease(activeGift.id, activeGift.name) }}><Play size={18} /><span>{t('menu.openRelease')}</span><ChevronRight size={15} /></button>}
           <button className={`danger-menu-item ${deleteCandidate === activeGift.id ? 'confirming' : ''}`} role="menuitem" disabled={busy} onClick={() => void deleteGift(activeGift)}><Trash2 size={18} /><span>{deleteCandidate === activeGift.id ? t('gift.deleteConfirm') : t('gift.delete', { name: activeGift.name })}</span></button>
-          <div className="tools-separator" />
         </>}
-        <button role="menuitem" onClick={newGift}><Plus size={19} /><span>{t('workspace.newGiftAction')}</span></button>
-        <button role="menuitem" onClick={() => void runOfflineCheck()}><FlaskConical size={18} /><span><strong>{t('menu.offline')}</strong><small>{t('menu.offlineHint')}</small></span></button>
-        <button role="menuitem" onClick={() => { setToolsOpen(false); setSettingsOpen(true) }}><Settings2 size={18} /><span>{t('menu.modelSettings')}</span><ChevronRight size={15} /></button>
       </section>
     </>}
 

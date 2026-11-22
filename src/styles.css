@@ -111,8 +111,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .section-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 0 1px 22px; }
 .section-header h1 { margin: 0; font-size: 28px; font-weight: 700; letter-spacing: -.04em; line-height: 1.2; }
 .section-header p { margin: 7px 0 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
-.section-action { display: grid; width: 41px; height: 41px; flex: 0 0 auto; place-items: center; border: 0; border-radius: 13px; background: var(--accent-soft); color: var(--accent); }
-.section-action:active { background: #dfdcff; transform: scale(.95); }
 .craft-list-screen .section-header { margin-bottom: 18px; }
 .conversation-list { overflow: hidden; border: 1px solid var(--line); border-radius: 18px; background: var(--surface); }
 .conversation-row { display: flex; width: 100%; min-height: 76px; align-items: center; gap: 13px; border: 0; border-bottom: 1px solid var(--line); background: var(--surface); padding: 12px 14px; text-align: left; }
@@ -171,7 +169,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .gift-list { display: grid; gap: 10px; }
 .gift-row { display: flex; width: 100%; min-height: 74px; align-items: center; gap: 12px; border: 1px solid var(--line); border-radius: 17px; background: var(--surface); padding: 11px; box-shadow: 0 2px 6px rgba(30,32,45,.02); text-align: left; }
 .gift-row:active { background: var(--soft); }
-.gift-row.current { border-color: #d4d0fa; }
 .gift-icon { display: grid; width: 48px; height: 48px; flex: 0 0 auto; place-items: center; border-radius: 14px; }
 .gift-icon.tone-0 { background: #e5f0e7; color: #39704f; }
 .gift-icon.tone-1 { background: #e9eef6; color: #526f94; }
@@ -213,7 +210,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .tools-menu > button > span { display: grid; min-width: 0; flex: 1; gap: 3px; font-size: 13px; }
 .tools-menu > button strong { font-size: 13px; font-weight: 550; }
 .tools-menu > button small { color: var(--muted); font-size: 10px; }
-.tools-separator { height: 1px; margin: 5px 8px; background: var(--line); }
 .settings-page { background: var(--bg); }
 .page-header { display: grid; flex: 0 0 auto; grid-template-columns: 42px 1fr 42px; align-items: center; border-bottom: 1px solid var(--line); padding: max(8px, env(safe-area-inset-top)) 12px 8px; }
 .page-header h1 { margin: 0; font-size: 16px; font-weight: 600; text-align: center; }

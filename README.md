@@ -19,7 +19,6 @@ Craft 是一个 Android 端的「自生长」宿主应用：不产出独立 APK�
 - JGit 版本管理：快照 = git commit（id 即 commit hash），回滚 = checkout + clean + 新 commit，历史线性
 - 会话状态恢复：冷启动回到上次 Gift / Tab，恢复未发送草稿与语言偏好
 - Android Keystore 加密保存模型 API Key
-- 无 API Key 时可运行明确标注的离线 Todo 验证（全链路，不调用模型）
 
 ## 持久化设计
 
@@ -94,8 +93,6 @@ export ANDROID_SDK_ROOT=$HOME/.local/share/craft-toolchain/android-sdk
 $ANDROID_SDK_ROOT/platform-tools/adb install -r android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
-启动后在「Craft」页右上角菜单点击「离线验证」：生成真实多文件 TSX Gift 并依次执行本地编译、Draft、UI 自测、git 快照和发布，不调用模型。
-
 ## 关键边界
 
 - Gift 是 Craft 内部模块，不导出独立 APK
@@ -115,7 +112,6 @@ src/compiler/               本地 TSX Worker 编译器
 src/native/craft.ts         Capacitor 原生契约（giftStore / runtime）
 src/runtime/                Gift 的 React/SDK Runtime
 src/i18n.ts                 中英文字典与语言检测
-src/sample.ts               离线 Todo 验证
 android/                    原生 Gift 存储（JGit）、Preview WebView、插件桥接
 scripts/                    Runtime 和 WASM 资源构建
 ```
