@@ -2,14 +2,17 @@
 
 Craft 是一个 Android 端的「自生长」宿主应用：不产出独立 APK，而是根据用户需求为自己增加功能模块——**Gift**（工具、效率模块、小游戏均可）。每个 Gift 有独立的多文件 TSX 源码（git 仓库）、单一项目会话、专属 agent、Draft/Release 构建与版本历史。
 
-界面支持中文 / English，默认跟随系统语言，可在「我的 → 语言」切换；中文界面中的 Gift/Gifts 译为「作品」，代码与存储契约保留 `Gift` 命名。
+界面语言与深浅色主题都跟随系统，应用内没有单独开关：系统语言是中文时显示中文，其余语言一律显示英文；中文界面中的 Gift/Gifts 译为「作品」，代码与存储契约保留 `Gift` 命名。
 
 ## 已实现
 
 - Craft 主工作区：工坊为两层会话列表 / 聊天详情，通用会话置顶；底部为工坊、作品、广场、我的
 - 每个作品只有一个项目会话；通用会话有独立固定工作目录，用于问答、草稿和普通文件
 - 通用会话的聊天记录、完整模型上下文、文件和未发送草稿均持久化，可在后续版本叠加记忆功能
-- 聊天式工作区、模板广场、Gift 列表（两段确认删除）与个人设置
+- 聊天式工作区：回复按 Markdown 渲染，新消息自动吸底，上滑阅读时出现「回到底部」
+- 作品列表：已发布的作品点开即用，开发中的进入会话，长按删除（两段确认）
+- 广场：随包内置 6 个做好的作品（专注计时器、轻量记账、习惯打卡、旅行手帐、单词卡片、喝水记录），可直接使用，或在此基础上继续开发
+- 系统返回手势 / 返回键在所有页面与弹层生效，由上到下逐层关闭（确认弹层 → 版本记录 → 菜单 → 设置页 / 会话），根页面再返回则回到桌面
 - 自研 AgentRuntime：响应 Schema 校验、15 个工具、循环无固定轮数上限（模型自然停 / 手动停止 / 请求失败）、发布需用户确认
 - 一个 Gift 绑定一个主 agent，可 `delegate_task` 委派独立上下文的子 agent
 - `edit_file` 精确字符串替换（多处匹配需 `replace_all`）、`read_file` 按 `offset/limit` 行分片
@@ -17,7 +20,7 @@ Craft 是一个 Android 端的「自生长」宿主应用：不产出独立 APK�
 - esbuild-wasm + Web Worker 本地编译，独立 Android Preview WebView
 - 真实截图、语义树、点击、输入和日志工具
 - JGit 版本管理：快照 = git commit（id 即 commit hash），回滚 = checkout + clean + 新 commit，历史线性
-- 会话状态恢复：冷启动回到上次 Gift / Tab，恢复未发送草稿与语言偏好
+- 会话状态恢复：冷启动回到上次 Gift / Tab，恢复未发送草稿
 - Android Keystore 加密保存模型 API Key
 
 ## 持久化设计
@@ -25,7 +28,7 @@ Craft 是一个 Android 端的「自生长」宿主应用：不产出独立 APK�
 所有数据位于系统共享目录 `/storage/emulated/0/Documents/Craft/`，全部原生实现，无浏览器适配层。卸载 App 不会删除该目录；只有用户手动删除文件，或在 App 内明确删除某个作品时才会移除对应数据。Android 11 及以上需要用户在系统设置中授予「所有文件访问」，Android 10 及以下使用存储运行时权限。旧版本的应用私有 `<filesDir>/craft/` 数据会在授权后自动复制到共享目录，不覆盖已有文件，也不自动删除旧副本。重装后原 API Key 密文无法由新 Keystore 密钥解密，需要在模型设置中重新填写。
 
 ```text
-Documents/Craft/gifts.json                        Gift 注册表
+Documents/Craft/gifts.json                        Gift 注册表（id、name、squareId?、releaseSnapshotId?、updatedAt）
 Documents/Craft/<giftId>/workspace/**             源码（git 仓库，.git 对 agent 不可见）
 Documents/Craft/<giftId>/snapshots/<commit>/meta.json  { id, message, createdAt, buildId? }
 Documents/Craft/<giftId>/builds/<id>/{app.js,app.css}  不可变构建产物
@@ -37,7 +40,7 @@ Documents/Craft/.general/workspace/**                通用会话固定工作目
 Documents/Craft/.general/conversation.json           通用会话聊天记录
 Documents/Craft/.general/context.jsonl               通用会话完整模型上下文
 Documents/Craft/.general/context-archive-<ts>.jsonl   通用会话压缩归档
-Documents/Craft/session.json                      { activeGiftId, activeTab, language, drafts }
+Documents/Craft/session.json                      { activeGiftId, activeTab, drafts }
 Documents/Craft/agent-config.json                 模型配置（apiKey 加密）
 ```
 
@@ -77,13 +80,15 @@ React · TypeScript · Vite · Capacitor 7 · Java Android（JGit）· esbuild-w
 
 模型接口默认 DeepSeek Chat Completions（`deepseek-flash`），思考档位为官方 `none / low / high / max`（默认 high；旧别名 minimal→low、medium/xhigh→high 在读取配置时归一化）。工具轮次间保留 `reasoning_content`，Android 网络请求走 CapacitorHttp。
 
+广场作品在构建时由 `scripts/squarePlugin.ts` 用与应用内相同的编译核心打包成 `src/square/works/<id>.json`（源码 + 产物，按需加载）。首次使用时安装成一个 Gift：写入源码、保存 Release 构建、发布首个快照；此后它与 agent 开发的作品没有区别，可以运行、继续开发、回滚和删除。
+
 ## 构建
 
 需要 JDK 21 和 Android SDK（minSdk 26）。可复用本机已有工具链：
 
 ```bash
 npm install
-npm run build        # runtime 资源 + tsc + vite
+npm run build        # runtime 资源 + 广场作品打包 + tsc + vite
 npm run lint
 npm run cap:sync
 export JAVA_HOME=$HOME/.local/share/craft-toolchain/jdk
@@ -96,6 +101,13 @@ APK 输出：`android/app/build/outputs/apk/debug/app-debug.apk`
 export ANDROID_SDK_ROOT=$HOME/.local/share/craft-toolchain/android-sdk
 $ANDROID_SDK_ROOT/platform-tools/adb install -r android/app/build/outputs/apk/debug/app-debug.apk
 ```
+
+## 浏览器里验证界面
+
+`npm run dev` 之后：
+
+- `http://localhost:5173/dev.html`：真实的 App 配内存版原生桥（`src/dev/`），数据存在 localStorage，加 `?reset` 清空。适合验证布局、主题、语言和各页面流程；不能跑 agent，点「打开 / 运行」只在页面底部显示提示。
+- `http://localhost:5173/preview.html?work=<id>`：单独运行一个广场作品。
 
 ## 关键边界
 
@@ -112,10 +124,14 @@ $ANDROID_SDK_ROOT/platform-tools/adb install -r android/app/build/outputs/apk/de
 src/agent/AgentRuntime.ts   主/子 agent 循环、工具执行、压缩触发
 src/agent/context.ts        纯函数：JSONL 编解码、行分片、精确编辑、压缩切点
 src/agent/contextImage.ts   归档序列化 + 分页 PNG 渲染（帧预算、丢最旧页）
-src/compiler/               本地 TSX Worker 编译器
+src/components/             PageHeader（返回 + 居中标题）、Markdown 渲染、系统返回手势 useBackGesture
+src/compiler/               本地 TSX Worker 编译器；project.ts 是与打包脚本共用的编译核心
 src/native/craft.ts         Capacitor 原生契约（giftStore / runtime）
 src/runtime/                Gift 的 React/SDK Runtime
-src/i18n.ts                 中英文字典与语言检测
+src/i18n.ts                 中英文字典与系统语言检测
+src/square/catalog.ts       广场作品目录；works/ 是生成的产物，不入库
+src/dev/                    浏览器验证用的内存版原生桥
+square/<id>/workspace/      广场作品源码，契约见 square/CONTRACT.md；dist/ 仅供 preview.html
 android/                    原生 Gift 存储（JGit）、Preview WebView、插件桥接
-scripts/                    Runtime 和 WASM 资源构建
+scripts/                    Runtime、WASM 资源与广场作品打包
 ```

@@ -39,6 +39,32 @@ ffmpeg -i /tmp/boot.mp4 -vf fps=31 /tmp/frames/f%03d.png   # 全帧率抽帧
 
 注意:`adb shell screenrecord ... &` 后必须保证 `am start` 与录制并行且录制进程有 `timeout` 保护,adb 管道挂起会让 `wait` 永不返回;录制成功与否先查设备上文件大小。
 
+## 广场作品(Square)
+
+- 源码在 `square/<id>/workspace/src/`,契约见 `square/CONTRACT.md`(文件、运行时限制、双语言、深浅色、验收)。新增作品:写源码 → 在 `src/square/catalog.ts` 登记图标/色调/分类 → 补 `square.<id>.name|description` 中英文案;缺 bundle 或缺文案都会在类型检查时报错。
+- `scripts/squarePlugin.ts` 用 `src/compiler/project.ts` 生成 `src/square/works/<id>.json` + `bundles.ts`(已 gitignore):`npm run square:build`,已包含在 `npm run build` 和 dev server 的 buildStart 里。dev server 对编译失败的作品保留上一次产物并打日志,生产构建则直接失败。
+- 单个作品预览:`http://127.0.0.1:5173/preview.html?work=<id>`。
+
+## 浏览器验证(无设备)
+
+- `npm run dev` → `http://localhost:5173/dev.html`:真实 App + `src/dev/fakes.ts` 内存桥(localStorage,`?reset` 清空)。改 UI 先在这里看布局 / 深浅色 / 中英文,再上模拟器。
+- headless Chromium 的 locale 仿真不改 `navigator.language`,验中文要用 init script 覆盖;headless WebKit 的 locale 仿真有效。
+
+## 模拟器验证
+
+- AVD `craft`(Pixel 6 / API 35),启动:
+  `ANDROID_AVD_HOME=$HOME/.config/.android/avd $ANDROID_SDK_ROOT/emulator/emulator -avd craft -no-window -gpu swiftshader_indirect -no-audio -no-snapshot-save`
+- WebView 调试:`adb forward tcp:9222 localabstract:webview_devtools_remote_$(adb shell pidof app.craft.android)`,`http://127.0.0.1:9222/json` 列出页面(PreviewActivity 也占一个,装完 / 重载后要重新 forward)。
+- 授权存储:`adb shell appops set app.craft.android MANAGE_EXTERNAL_STORAGE allow`。
+- 切主题:`adb shell cmd uimode night yes|no`;切应用语言:`adb shell cmd locale set-app-locales app.craft.android --locales zh-CN`(`reset-app-locales` 清除);手势导航:`adb shell cmd overlay enable com.android.internal.systemui.navbar.gestural`。
+- **App 在后台时收不到主题 / 语言配置变更**,切完先 `am start` 拉回前台再判断。
+- 模型配置可以直接从 WebView 控制台写:`Capacitor.Plugins.CraftGift.setAgentConfig({...})`,每次 run 都会重新读取。
+
+## Android 资源 / 依赖备忘
+
+- `res/*.xml` 注释里不能出现 `--`(例如 `--bg`),否则 mergeDebugResources 失败。
+- `androidx.webkit.WebSettingsCompat` 需要 `androidx.webkit:webkit` 依赖(`variables.gradle` 里有版本号)。
+
 ## 真机部署
 
 - 用户的手机:vivo iQOO(via MTP)。**adb 看不到它**(USB 调试未开),不要反复试 adb。
