@@ -1,6 +1,7 @@
 package app.craft.android;
 
 import android.annotation.SuppressLint;
+import android.content.res.Configuration;
 import android.app.Activity;
 import android.content.Intent;
 import android.graphics.Bitmap;
@@ -15,6 +16,9 @@ import android.webkit.WebView;
 
 import org.json.JSONObject;
 
+
+import androidx.core.view.WindowInsetsControllerCompat;
+import androidx.webkit.WebSettingsCompat;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.lang.ref.WeakReference;
@@ -76,7 +80,11 @@ public class PreviewActivity extends Activity {
         settings.setAllowUniversalAccessFromFileURLs(false);
         settings.setMediaPlaybackRequiresUserGesture(false);
         settings.setLoadsImagesAutomatically(true);
-        webView.setBackgroundColor(0xFF101418);
+        // Transparent until the page paints: the window background (boot mark) shows instead
+        // of a flat backdrop, as on the main window.
+        webView.setBackgroundColor(android.graphics.Color.TRANSPARENT);
+        // Gifts paint their own dark theme from prefers-color-scheme; no system re-tinting.
+        WebSettingsCompat.setAlgorithmicDarkeningAllowed(settings, false);
         webView.setWebChromeClient(new WebChromeClient() {
             @Override
             public boolean onConsoleMessage(ConsoleMessage message) {
@@ -85,6 +93,7 @@ public class PreviewActivity extends Activity {
             }
         });
         setContentView(webView);
+        applySystemBarAppearance();
         applyIntent(getIntent());
     }
 
@@ -105,6 +114,20 @@ public class PreviewActivity extends Activity {
             webView = null;
         }
         super.onDestroy();
+    }
+
+    /** System bar icon contrast follows the system theme; the bool resolves the night qualifier. */
+    private void applySystemBarAppearance() {
+        WindowInsetsControllerCompat systemBars = new WindowInsetsControllerCompat(getWindow(), webView);
+        boolean lightBars = getResources().getBoolean(R.bool.light_system_bars);
+        systemBars.setAppearanceLightStatusBars(lightBars);
+        systemBars.setAppearanceLightNavigationBars(lightBars);
+    }
+
+    @Override
+    public void onConfigurationChanged(Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        applySystemBarAppearance();
     }
 
     /** Loads (or reloads) the build described by the intent extras. */

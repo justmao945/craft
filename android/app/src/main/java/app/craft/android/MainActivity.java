@@ -1,5 +1,6 @@
 package app.craft.android;
 
+import android.content.res.Configuration;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -11,6 +12,7 @@ import androidx.core.splashscreen.SplashScreen;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
+import androidx.webkit.WebSettingsCompat;
 
 import com.getcapacitor.BridgeActivity;
 
@@ -54,9 +56,10 @@ public class MainActivity extends BridgeActivity {
         // through during WebView startup instead of a flat blank backdrop. The page's
         // own opaque backgrounds (--bg) take over as soon as HTML renders.
         webView.setBackgroundColor(android.graphics.Color.TRANSPARENT);
-        WindowInsetsControllerCompat systemBars = new WindowInsetsControllerCompat(getWindow(), webView);
-        systemBars.setAppearanceLightStatusBars(true);
-        systemBars.setAppearanceLightNavigationBars(true);
+        // The page paints its own dark theme from prefers-color-scheme; the system must not
+        // re-tint it on top once the app theme turns dark.
+        WebSettingsCompat.setAlgorithmicDarkeningAllowed(getBridge().getWebView().getSettings(), false);
+        applySystemBarAppearance();
         ViewCompat.setOnApplyWindowInsetsListener(webView, (view, windowInsets) -> {
             int top = windowInsets.getInsets(WindowInsetsCompat.Type.statusBars()).top;
             int navigationBottom = windowInsets.getInsets(WindowInsetsCompat.Type.navigationBars()).bottom;
@@ -71,5 +74,19 @@ public class MainActivity extends BridgeActivity {
             return windowInsets;
         });
         ViewCompat.requestApplyInsets(webView);
+    }
+
+    /** System bar icon contrast follows the system theme; the bool resolves the night qualifier. */
+    private void applySystemBarAppearance() {
+        WindowInsetsControllerCompat systemBars = new WindowInsetsControllerCompat(getWindow(), getBridge().getWebView());
+        boolean lightBars = getResources().getBoolean(R.bool.light_system_bars);
+        systemBars.setAppearanceLightStatusBars(lightBars);
+        systemBars.setAppearanceLightNavigationBars(lightBars);
+    }
+
+    @Override
+    public void onConfigurationChanged(Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        applySystemBarAppearance();
     }
 }

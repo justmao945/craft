@@ -5,6 +5,8 @@ export const COMPACTION_STATUS = 'Compacting earlier context into archive pages'
 
 export interface ToolCall {
   id: string
+  /** Provider call kind ('function'); absent only in contexts saved before it was echoed back. */
+  type?: string
   function: { name: string; arguments: string }
 }
 

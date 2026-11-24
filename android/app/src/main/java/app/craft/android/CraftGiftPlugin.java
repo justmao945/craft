@@ -96,12 +96,31 @@ public class CraftGiftPlugin extends Plugin {
             return;
         }
         try {
-            CraftStore.GiftInfo gift = store.createGift(name);
+            CraftStore.GiftInfo gift = store.createGift(name, call.getString("squareId"));
             JSObject ret = new JSObject();
             ret.put("gift", giftJson(gift));
             call.resolve(ret);
         } catch (Exception e) {
             call.reject("Could not create gift: " + e.getMessage(), e);
+        }
+    }
+
+    @PluginMethod
+    public void installSquareWork(PluginCall call) {
+        String squareId = requiredString(call, "squareId", "squareId");
+        String name = requiredString(call, "name", "name");
+        String js = call.getString("js");
+        String css = call.getString("css");
+        JSONObject files = call.getObject("files");
+        if (squareId == null || name == null || js == null || css == null || files == null) {
+            if (squareId != null && name != null) call.reject("files, js and css are required");
+            return;
+        }
+        try {
+            CraftStore.GiftInfo gift = store.installSquareWork(squareId, name, files, js, css, call.getString("message", ""));
+            call.resolve(new JSObject().put("gift", giftJson(gift)));
+        } catch (Exception e) {
+            call.reject("Could not install Square work: " + e.getMessage(), e);
         }
     }
 
@@ -580,6 +599,10 @@ public class CraftGiftPlugin extends Plugin {
         obj.put("id", gift.id);
         obj.put("name", gift.name);
         obj.put("updatedAt", gift.updatedAt);
+        obj.put("hasDraft", gift.hasDraft);
+        if (gift.squareId != null) {
+            obj.put("squareId", gift.squareId);
+        }
         if (gift.releaseSnapshotId != null) {
             obj.put("releaseSnapshotId", gift.releaseSnapshotId);
         }

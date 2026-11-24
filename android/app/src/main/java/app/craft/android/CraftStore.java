@@ -27,6 +27,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
@@ -34,7 +35,7 @@ import java.util.UUID;
 /**
  * File-backed storage for Craft gifts, all under the public Documents directory:
  *
- *   Documents/Craft/gifts.json                       gift registry
+ *   Documents/Craft/gifts.json                       gift registry ({ id, name, squareId?, releaseSnapshotId? })
  *   Documents/Craft/<giftId>/workspace/**             live workspace source files (git repo)
  *   Documents/Craft/<giftId>/snapshots/<id>/meta.json { id, message, createdAt, buildId? }
  *   Documents/Craft/<giftId>/builds/<id>/{app.js,app.css}  immutable builds
@@ -86,12 +87,16 @@ public class CraftStore {
         public final String name;
         public final String releaseSnapshotId; // nullable
         public final long updatedAt;
+        public final String squareId; // nullable: Square work this Gift was installed from
+        public final boolean hasDraft; // a draft build other than the release exists
 
-        GiftInfo(String id, String name, String releaseSnapshotId, long updatedAt) {
+        GiftInfo(String id, String name, String releaseSnapshotId, long updatedAt, String squareId, boolean hasDraft) {
             this.id = id;
             this.name = name;
             this.releaseSnapshotId = releaseSnapshotId;
             this.updatedAt = updatedAt;
+            this.squareId = squareId;
+            this.hasDraft = hasDraft;
         }
     }
 
@@ -196,7 +201,7 @@ public class CraftStore {
         throw new IllegalArgumentException("Unknown gift: " + giftId);
     }
 
-    public synchronized GiftInfo createGift(String name) throws IOException {
+    public synchronized GiftInfo createGift(String name, String squareId) throws IOException {
         if (name == null || name.trim().isEmpty()) {
             throw new IllegalArgumentException("Gift name is required");
         }
@@ -216,6 +221,9 @@ public class CraftStore {
         try {
             entry.put("id", giftId);
             entry.put("name", trimmed);
+            if (squareId != null && !squareId.isEmpty()) {
+                entry.put("squareId", squareId);
+            }
             entry.put("updatedAt", System.currentTimeMillis());
             gifts.put(entry);
             registry.put("gifts", gifts);
@@ -238,6 +246,33 @@ public class CraftStore {
         //noinspection ResultOfMethodCallIgnored
         new File(giftDir, BUILDS_DIR).mkdirs();
         return giftFromEntry(entry);
+    }
+
+    /**
+     * Creates a Gift from a Square work: the source files, a release build and the published
+     * first snapshot. Nothing is left behind when a step fails.
+     */
+    public GiftInfo installSquareWork(String squareId, String name, JSONObject files, String js, String css, String message)
+            throws IOException, JSONException {
+        GiftInfo gift = createGift(name, squareId);
+        try {
+            File workspace = workspaceDir(gift.id);
+            Iterator<String> paths = files.keys();
+            while (paths.hasNext()) {
+                String path = paths.next();
+                writeFileIn(workspace, path, files.getString(path));
+            }
+            String buildId = saveBuild(gift.id, null, js, css, false);
+            SnapshotInfo snapshot = createSnapshot(gift.id, message, buildId);
+            return publish(gift.id, snapshot.id);
+        } catch (IOException | JSONException | RuntimeException e) {
+            try {
+                deleteGift(gift.id);
+            } catch (IOException cleanup) {
+                e.addSuppressed(cleanup);
+            }
+            throw e;
+        }
     }
 
     /** Sets releaseSnapshotId (or clears it when null) and refreshes updatedAt. */
@@ -266,11 +301,16 @@ public class CraftStore {
         throw new IllegalArgumentException("Unknown gift: " + giftId);
     }
 
-    private static GiftInfo giftFromEntry(JSONObject entry) {
+    private GiftInfo giftFromEntry(JSONObject entry) throws IOException {
         String releaseSnapshotId = entry.has("releaseSnapshotId") && !entry.isNull("releaseSnapshotId")
                 ? entry.optString("releaseSnapshotId")
                 : null;
-        return new GiftInfo(entry.optString("id"), entry.optString("name"), releaseSnapshotId, entry.optLong("updatedAt"));
+        String squareId = entry.optString("squareId", "");
+        String id = entry.optString("id");
+        String draftBuild = pointerBuildId(id, "draft");
+        boolean hasDraft = draftBuild != null && !draftBuild.equals(pointerBuildId(id, "release"));
+        return new GiftInfo(id, entry.optString("name"), releaseSnapshotId, entry.optLong("updatedAt"),
+                squareId.isEmpty() ? null : squareId, hasDraft);
     }
 
     private static boolean containsGift(JSONArray gifts, String giftId) {
@@ -813,6 +853,9 @@ public class CraftStore {
         } catch (IOException | GitAPIException e) {
             throw new IOException("Could not restore snapshot " + snapshotId, e);
         }
+        // The draft was built from the rolled-back code and no longer describes the workspace.
+        //noinspection ResultOfMethodCallIgnored
+        new File(giftDir(giftId), DRAFT_POINTER).delete();
 
         SnapshotInfo snapshot = createSnapshot(giftId, "Rollback to " + snapshotId, targetBuildId);
         if (targetBuildId != null) {

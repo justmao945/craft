@@ -1,7 +1,11 @@
 export interface Gift {
   id: string
   name: string
+  /** Square work this Gift was installed from. */
+  squareId?: string
   releaseSnapshotId?: string
+  /** A draft build other than the release exists. */
+  hasDraft?: boolean
   updatedAt: number
 }
 
@@ -56,7 +60,5 @@ export interface ChatMessage {
 export interface SessionState {
   activeGiftId?: string
   activeTab?: 'craft' | 'gifts' | 'discover' | 'profile'
-  language?: 'zh' | 'en'
-  /** Unsent composer text, keyed by Gift id ('' = new Gift, '__general__' = general conversation). */
   drafts: Record<string, string>
 }

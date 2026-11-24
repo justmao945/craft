@@ -1,7 +1,7 @@
 import { CapacitorHttp } from '@capacitor/core'
 import { z } from 'zod'
 import { compileProject } from '../compiler/compiler'
-import { generalStore, giftStore, runtime } from '../native/craft'
+import { generalStore, giftManifest, giftStore, runtime } from '../native/craft'
 import type { AgentConfig, Gift, BuildArtifact, ChatMessage } from '../types'
 import { COMPACTION_STATUS } from './context'
 import type { AssistantMessage, ContentPart, ModelMessage } from './context'
@@ -22,6 +22,8 @@ const AssistantMessageSchema = z.object({
   reasoning_content: z.string().nullish(),
   tool_calls: z.array(z.object({
     id: z.string(),
+    // The provider requires the call kind back on every echoed message.
+    type: z.string().default('function'),
     function: z.object({ name: z.string(), arguments: z.string() }),
   })).optional(),
 })
@@ -47,6 +49,12 @@ interface UsageState {
 function isContextOverflow(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error)
   return /maximum context length|context[_ ]length|too many tokens|prompt is too long|input (is )?too long/i.test(message)
+}
+
+/** Wire form of a context message; tool calls saved before their kind was kept gain it here. */
+function toProviderMessage(message: ModelMessage): ModelMessage {
+  if (message.role !== 'assistant' || !message.tool_calls) return message
+  return { ...message, tool_calls: message.tool_calls.map((call) => ({ ...call, type: call.type ?? 'function' })) }
 }
 
 function stringArgument(args: ToolArguments, key: string, allowEmpty = false): string {
@@ -366,7 +374,7 @@ export class AgentRuntime {
     if (!baseUrl.startsWith('https://')) throw new Error('Model endpoint must use HTTPS')
     if (this.abortRequested) throw new Error(STOP_MESSAGE)
     const body = {
-      model, messages, reasoning_effort: reasoningEffort,
+      model, messages: messages.map(toProviderMessage), reasoning_effort: reasoningEffort,
       ...(activeTools.length ? { tools: activeTools, tool_choice: 'auto' } : {}),
     }
     // CapacitorHttp bypasses WebView CORS and keeps all traffic on the native stack.
@@ -408,9 +416,7 @@ export class AgentRuntime {
         if (this.mode !== 'gift' || this.currentGiftId) throw new Error('This conversation cannot create a Gift')
         const gift = await giftStore.createGift(stringArgument(args, 'name').trim())
         this.selectGift(gift)
-        await giftStore.writeFile(gift.id, 'gift.json', JSON.stringify({
-          id: gift.id, name: gift.name, runtimeVersion: 1, entry: 'src/main.tsx', permissions: ['storage'],
-        }, null, 2))
+        await giftStore.writeFile(gift.id, 'gift.json', giftManifest(gift))
         await this.hooks.onGiftsChanged()
         return { ok: true, gift }
       }
@@ -503,6 +509,8 @@ export class AgentRuntime {
     if (result.diagnostics.length || !result.js) return { ok: false, diagnostics: result.diagnostics }
     const buildId = await giftStore.saveBuild(giftId, undefined, result.js, result.css, true)
     this.lastBuild = { giftId, artifact: { buildId, js: result.js, css: result.css } }
+    // The first draft build turns the Gift into "unpublished changes" in the lists.
+    await this.hooks.onGiftsChanged()
     await runtime.openDraft(giftId, workspace.gift.name)
     return { ok: true, buildId, diagnostics: [] }
   }

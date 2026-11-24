@@ -1,0 +1,15 @@
+<!doctype html>
+<!-- Dev harness: the real app on an in-memory bridge, for checking UI changes in a browser without a
+     device. Not part of the app build. Usage: http://127.0.0.1:5173/dev.html (state lives in
+     localStorage; ?reset clears it). Agents cannot run here: there is no model connection. -->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Craft dev</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/dev/main.tsx"></script>
+  </body>
+</html>

@@ -1,18 +1,22 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import {
-  ArrowLeft, ArrowUp, BarChart3, Blocks, BookOpen, CalendarCheck2, Check, ChevronRight, CircleUserRound,
-  Clock3, Compass, FolderGit2, GlassWater, Languages, LayoutGrid, Lightbulb,
-  LoaderCircle, Map, MessageCircle, MoreHorizontal, NotebookPen, Pin, Play, Plus, Rocket, Search,
-  ShieldCheck, Sparkles, Square, Timer, Trash2, X,
+  ArrowUp, BarChart3, Blocks, BookOpen, CalendarCheck2, Check, ChevronRight, CircleUserRound,
+  Clock3, Compass, FolderGit2, LayoutGrid, Lightbulb, LoaderCircle, MessageCircle,
+  MoreHorizontal, NotebookPen, Pin, Play, Plus, Rocket, Search, ShieldCheck, Sparkles, Square, Trash2, X,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
+import { SplashScreen } from '@capacitor/splash-screen'
 import { AgentRuntime, AGENT_ROUND_STATUS_PREFIX, SUBAGENT_STATUS_PREFIX } from './agent/AgentRuntime'
 import { COMPACTION_STATUS } from './agent/context'
-import { SplashScreen } from '@capacitor/splash-screen'
-import { generalStore, giftStore, runtime } from './native/craft'
-import { detectLanguage, isMessageKey, translate } from './i18n'
+import { PageHeader } from './components/PageHeader'
+import { Markdown } from './components/Markdown'
+import { useBackGesture } from './components/backGesture'
+import { detectLanguage, followSystemLanguage, isMessageKey, localeOf, translate } from './i18n'
 import type { Language, MessageKey } from './i18n'
+import { generalStore, giftStore, runtime } from './native/craft'
+import { squareWorks } from './square/catalog'
+import type { SquareWork } from './square/catalog'
 import type { AgentConfig, ChatMessage, Gift, SessionState, Snapshot, StorageStatus } from './types'
 import './styles.css'
 
@@ -21,27 +25,17 @@ type AgentMode = 'gift' | 'general'
 
 const NEW_GIFT_KEY = '__new__'
 const GENERAL_SESSION_KEY = '__general__'
-
-type InspirationId = 'focus' | 'ledger' | 'habit' | 'travel' | 'words' | 'water'
-type InspirationCategory = 'productivity' | 'finance' | 'life' | 'study'
-
-const inspirations: readonly { id: InspirationId; icon: LucideIcon; tone: string; category: InspirationCategory }[] = [
-  { id: 'focus', icon: Timer, tone: 'mint', category: 'productivity' },
-  { id: 'ledger', icon: BarChart3, tone: 'blue', category: 'finance' },
-  { id: 'habit', icon: CalendarCheck2, tone: 'orange', category: 'productivity' },
-  { id: 'travel', icon: Map, tone: 'lavender', category: 'life' },
-  { id: 'words', icon: BookOpen, tone: 'yellow', category: 'study' },
-  { id: 'water', icon: GlassWater, tone: 'cyan', category: 'life' },
-]
-
 const categories = ['all', 'productivity', 'life', 'finance', 'study'] as const
+/** Avatar colours of Gifts that did not come from the Square, in list order. */
+const tones = ['mint', 'blue', 'orange', 'lavender'] as const
+const workBySquareId = new Map<string, SquareWork>(squareWorks.map((work) => [work.id, work]))
 
 type SuggestionKey = 'suggestion.ledger' | 'suggestion.habit' | 'suggestion.notes' | 'suggestion.think' | 'suggestion.explain' | 'suggestion.write'
 type Suggestion = { icon: LucideIcon; key: SuggestionKey; prompt: MessageKey }
 
 const giftSuggestions: readonly Suggestion[] = [
-  { icon: BarChart3, key: 'suggestion.ledger', prompt: 'inspiration.ledger.prompt' },
-  { icon: CalendarCheck2, key: 'suggestion.habit', prompt: 'inspiration.habit.prompt' },
+  { icon: BarChart3, key: 'suggestion.ledger', prompt: 'suggestion.ledger.prompt' },
+  { icon: CalendarCheck2, key: 'suggestion.habit', prompt: 'suggestion.habit.prompt' },
   { icon: NotebookPen, key: 'suggestion.notes', prompt: 'suggestion.notes.prompt' },
 ] as const
 
@@ -55,13 +49,45 @@ function CraftMark({ size = 'normal' }: { size?: 'small' | 'normal' | 'large' })
   return <span className={`craft-mark ${size}`}><Blocks strokeWidth={2.2} /></span>
 }
 
-function welcomeMessage(language: Language): ChatMessage {
-  return { id: 'welcome', role: 'assistant', createdAt: Date.now(), text: translate(language, 'welcome.subtitle') }
+/** First message of a new conversation; a Gift installed from the Square introduces its sources instead. */
+function welcomeMessage(language: Language, giftName?: string): ChatMessage {
+  return { id: 'welcome', role: 'assistant', createdAt: Date.now(), text: giftName ? translate(language, 'welcome.remixSubtitle', { name: giftName }) : translate(language, 'welcome.subtitle') }
+}
+
+/** Single line of a message with its Markdown markup removed, for the conversation lists. */
+function plainText(markdown: string): string {
+  return markdown
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/^\s*(#{1,6}|[-*+]|\d+\.)\s+/gm, '')
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/(\*\*|__|~~|`|\*)/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
 }
 
 function conversationPreview(messages: ChatMessage[] | undefined, fallback: string): string {
   const latest = messages?.filter((message) => message.role !== 'status').at(-1)
-  return latest && latest.id !== 'welcome' ? latest.text : fallback
+  return latest && latest.id !== 'welcome' ? plainText(latest.text) : fallback
+}
+
+function SquareCard({ work, language, installed, installing, onRun, onBuild }: {
+  work: SquareWork
+  language: Language
+  installed: boolean
+  installing: boolean
+  onRun: () => void
+  onBuild: () => void
+}) {
+  const Icon = work.icon
+  return <article className={`square-card ${installing ? 'installing' : ''}`} aria-busy={installing}>
+    <span className={`template-icon tone-${work.tone}`}><Icon size={23} /></span>
+    <strong>{translate(language, `square.${work.id}.name`)}</strong>
+    <p>{translate(language, `square.${work.id}.description`)}</p>
+    <div className="square-actions">
+      <button className="square-use" disabled={installing} onClick={onRun}>{translate(language, installed ? 'square.open' : 'square.use')}</button>
+      <button className="square-build" disabled={installing} onClick={onBuild}>{translate(language, installed ? 'square.continue' : 'square.remix')}</button>
+    </div>
+  </article>
 }
 
 export default function App() {
@@ -90,7 +116,11 @@ export default function App() {
   const [versionsOpen, setVersionsOpen] = useState(false)
   const [confirmation, setConfirmation] = useState<{ action: string; resolve: (approved: boolean) => void }>()
   const [deleteCandidate, setDeleteCandidate] = useState<string>()
-  const messagesEndRef = useRef<HTMLDivElement>(null)
+  const [installing, setInstalling] = useState<SquareWork['id']>()
+  const [atBottom, setAtBottom] = useState(true)
+  const conversationRef = useRef<HTMLDivElement>(null)
+  const pinnedToBottom = useRef(true)
+  const installLock = useRef(false)
   const composerRef = useRef<HTMLTextAreaElement>(null)
   const runningAgentRef = useRef<AgentRuntime | undefined>(undefined)
   const sessionRef = useRef<SessionState>({ drafts: {} })
@@ -110,7 +140,7 @@ export default function App() {
   const agentsRef = useRef(new globalThis.Map<string, AgentRuntime>())
 
   const t = useCallback((key: MessageKey, vars: Record<string, string | number> = {}) => translate(language, key, vars), [language])
-  const locale = language === 'zh' ? 'zh-CN' : 'en'
+  const locale = localeOf(language)
 
   const refreshGifts = useCallback(async () => {
     setGifts(await giftStore.listGifts())
@@ -193,10 +223,15 @@ export default function App() {
     return instance
   }, [agentHooks])
 
+  const pinToBottom = useCallback(() => {
+    pinnedToBottom.current = true
+    setAtBottom(true)
+  }, [])
+
   const openGift = useCallback(async (gift: Gift) => {
     if (busy) return
     const history = await giftStore.getConversation(gift.id)
-    const next = history.length ? history : [welcomeMessage(language)]
+    const next = history.length ? history : [welcomeMessage(language, gift.squareId ? gift.name : undefined)]
     activeGiftIdRef.current = gift.id
     creatingGiftRef.current = false
     setActiveGiftId(gift.id)
@@ -206,9 +241,10 @@ export default function App() {
     setInput(sessionRef.current.drafts[gift.id] ?? '')
     setToolsOpen(false)
     setConversationOpen(true)
+    pinToBottom()
     await getAgent(gift)
     setActiveTab('craft')
-  }, [busy, getAgent, language])
+  }, [busy, getAgent, language, pinToBottom])
 
   const openGeneral = useCallback(async () => {
     if (busy) return
@@ -226,8 +262,9 @@ export default function App() {
     setToolsOpen(false)
     setActiveTab('craft')
     setConversationOpen(true)
+    pinToBottom()
     await getAgent(undefined, 'general')
-  }, [busy, getAgent, language])
+  }, [busy, getAgent, language, pinToBottom])
 
   const newGift = useCallback(() => {
     if (busy) return
@@ -243,7 +280,8 @@ export default function App() {
     setToolsOpen(false)
     setActiveTab('craft')
     setConversationOpen(true)
-  }, [busy, language])
+    pinToBottom()
+  }, [busy, language, pinToBottom])
 
   const checkStorage = useCallback(async () => {
     try {
@@ -253,6 +291,8 @@ export default function App() {
       setStorageError(error instanceof Error ? error.message : String(error))
     }
   }, [])
+
+  useEffect(() => followSystemLanguage(() => setLanguage(detectLanguage())), [])
 
   useEffect(() => {
     if (storageStatus?.granted) return
@@ -278,27 +318,27 @@ export default function App() {
       sessionReady.current = true
       setGifts(initialGifts)
       setConfig(initialConfig)
-      if (session.language) setLanguage(session.language)
       if (session.activeTab) setActiveTab(session.activeTab)
       const restored = session.activeGiftId ? initialGifts.find((gift) => gift.id === session.activeGiftId) : undefined
       if (restored) {
         const history = await giftStore.getConversation(restored.id)
         if (!active) return
-        const next = history.length ? history : [welcomeMessage(session.language ?? detectLanguage())]
+        const next = history.length ? history : [welcomeMessage(detectLanguage(), restored.squareId ? restored.name : undefined)]
         activeGiftIdRef.current = restored.id
         setActiveGiftId(restored.id)
         messagesRef.current = next
         setMessages(next)
         await getAgent(restored)
       } else {
-        const next = generalHistory.length ? generalHistory : [welcomeMessage(session.language ?? detectLanguage())]
+        const next = generalHistory.length ? generalHistory : [welcomeMessage(detectLanguage())]
         generalMessagesRef.current = next
         setGeneralMessages(next)
         messagesRef.current = next
         setMessages(next)
         await getAgent(undefined, 'general')
       }
-      if (active) setInput(session.drafts[restored?.id ?? GENERAL_SESSION_KEY] ?? '')
+      if (!active) return
+      setInput(session.drafts[restored?.id ?? GENERAL_SESSION_KEY] ?? '')
     })()
     return () => { active = false }
   }, [getAgent, storageStatus?.granted])
@@ -306,9 +346,8 @@ export default function App() {
   useEffect(() => {
     sessionRef.current.activeTab = activeTab
     sessionRef.current.activeGiftId = activeGiftId
-    sessionRef.current.language = language
     persistSession()
-  }, [activeTab, activeGiftId, language, persistSession])
+  }, [activeTab, activeGiftId, persistSession])
 
   useEffect(() => {
     const draftKey = activeGiftId ?? (creatingGift ? '' : GENERAL_SESSION_KEY)
@@ -347,8 +386,22 @@ export default function App() {
     composer.style.height = `${Math.min(composer.scrollHeight, 112)}px`
   }, [input, activeTab])
 
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ block: 'end' })
+  // While the reader stays at the bottom, new content keeps it there; scrolling up detaches.
+  const onConversationScroll = () => {
+    const element = conversationRef.current
+    if (!element) return
+    pinnedToBottom.current = element.scrollHeight - element.scrollTop - element.clientHeight < 48
+    setAtBottom(pinnedToBottom.current)
+  }
+  const scrollToLatest = () => {
+    const element = conversationRef.current
+    if (element) element.scrollTop = element.scrollHeight
+    pinToBottom()
+  }
+  useLayoutEffect(() => {
+    if (!pinnedToBottom.current) return
+    const element = conversationRef.current
+    if (element) element.scrollTop = element.scrollHeight
   }, [messages, status])
 
   useEffect(() => {
@@ -364,6 +417,20 @@ export default function App() {
     return () => { active = false }
   }, [activeTab, conversationOpen, gifts])
 
+  // System back gesture: the overlay or page on top closes first, down to the tab screens.
+  const closeConversation = useCallback(() => {
+    setConversationOpen(false)
+    setToolsOpen(false)
+  }, [])
+  useBackGesture(conversationOpen && !busy, closeConversation)
+  useBackGesture(settingsOpen, () => setSettingsOpen(false))
+  useBackGesture(toolsOpen, () => setToolsOpen(false))
+  useBackGesture(versionsOpen, () => setVersionsOpen(false))
+  useBackGesture(confirmation !== undefined, () => {
+    confirmation?.resolve(false)
+    setConfirmation(undefined)
+  })
+
   const send = async (event: FormEvent) => {
     event.preventDefault()
     const prompt = input.trim()
@@ -371,6 +438,7 @@ export default function App() {
     setInput('')
     setBusy(true)
     addMessage('user', prompt)
+    pinToBottom()
     try {
       const agent = activeGift
         ? await getAgent(activeGift)
@@ -452,13 +520,45 @@ export default function App() {
     }
   }
 
+  /** Gifts tab: a published Gift runs as it is, one still in development opens its conversation. */
+  const openGiftEntry = (gift: Gift) => {
+    if (busy) return
+    if (gift.releaseSnapshotId) void runtime.openRelease(gift.id, gift.name)
+    else void openGift(gift)
+  }
+
+  /** Installs a Square work on first use, then hands its Gift to `then`; later calls reuse the Gift. */
+  const withSquareWork = async (work: SquareWork, then: (gift: Gift) => Promise<void>) => {
+    if (busy || installLock.current) return
+    installLock.current = true
+    setInstalling(work.id)
+    try {
+      let gift = gifts.find((candidate) => candidate.squareId === work.id)
+      if (!gift) {
+        if (!config.apiKey.trim()) throw new Error(t('notice.needModel'))
+        const bundle = await work.load()
+        gift = await giftStore.installSquareWork({ squareId: work.id, name: t(`square.${work.id}.name`), files: bundle.files, js: bundle.js, css: bundle.css, message: t('square.snapshotMessage') })
+        await refreshGifts()
+        setNotice(t('notice.installed', { name: gift.name }))
+      }
+      await then(gift)
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : String(error))
+    } finally {
+      installLock.current = false
+      setInstalling(undefined)
+    }
+  }
+
   const activeGift = gifts.find((gift) => gift.id === activeGiftId)
   const isWelcome = !activeGiftId && messages.length === 1 && messages[0].id === 'welcome' && !status
   const suggestions = creatingGift ? giftSuggestions : generalSuggestions
   const composerPlaceholder = activeGift
     ? t('composer.giftPlaceholder')
     : creatingGift ? t('composer.placeholder') : t('composer.generalPlaceholder')
-  const filteredInspirations = discoverCategory === 'all' ? inspirations : inspirations.filter((item) => item.category === discoverCategory)
+  const giftStatus = (gift: Gift) => t(gift.hasDraft ? 'gift.draft' : gift.releaseSnapshotId ? 'gift.published' : 'gift.developing')
+  const filteredWorks = discoverCategory === 'all' ? squareWorks : squareWorks.filter((work) => work.category === discoverCategory)
+  const installedWorks = new Set(gifts.flatMap((gift) => (gift.squareId ? [gift.squareId] : [])))
   const normalizedGiftQuery = giftQuery.trim().toLocaleLowerCase(locale)
   const filteredGifts = normalizedGiftQuery
     ? gifts.filter((gift) => gift.name.toLocaleLowerCase(locale).includes(normalizedGiftQuery))
@@ -491,10 +591,6 @@ export default function App() {
     if (busy) return
     setInput(prompt)
     requestAnimationFrame(() => composerRef.current?.focus())
-  }
-
-  const continueGift = (gift: Gift) => {
-    void openGift(gift)
   }
 
   const requestSharedStorage = async () => {
@@ -541,58 +637,58 @@ export default function App() {
             <small>{generalPreview}</small>
           </span>
         </button>
-        {gifts.map((gift, index) => <button className="conversation-row" key={gift.id} disabled={busy} onClick={() => continueGift(gift)}>
-          <span className={`conversation-avatar tone-${index % 4}`}><Blocks size={23} /></span>
-          <span className="conversation-row-main">
-            <span className="conversation-row-title"><strong>{gift.name}</strong><time>{formatListTime(gift.updatedAt)}</time></span>
-            <small>{conversationPreview(conversationPreviews[gift.id], gift.releaseSnapshotId ? t('gift.published') : t('gift.developing'))}</small>
-          </span>
-        </button>)}
+        {gifts.map((gift, index) => {
+          const work = gift.squareId ? workBySquareId.get(gift.squareId) : undefined
+          const Icon = work?.icon ?? Blocks
+          return <button className="conversation-row" key={gift.id} disabled={busy} onClick={() => void openGift(gift)}>
+            <span className={`conversation-avatar tone-${work?.tone ?? tones[index % tones.length]}`}><Icon size={23} /></span>
+            <span className="conversation-row-main">
+              <span className="conversation-row-title"><strong>{gift.name}</strong><time>{formatListTime(gift.updatedAt)}</time></span>
+              <small>{conversationPreview(conversationPreviews[gift.id], giftStatus(gift))}</small>
+            </span>
+          </button>
+        })}
       </section>
     </main>}
 
     {!settingsOpen && activeTab === 'craft' && conversationOpen && <main className="screen craft-screen">
-      <header className="workspace-header conversation-header">
-        <button className="conversation-back" aria-label={t('craft.back')} disabled={busy} onClick={() => { setConversationOpen(false); setToolsOpen(false) }}><ArrowLeft size={22} /></button>
-        <span className={`workspace-symbol ${activeGift || creatingGift ? 'gift' : ''}`}>
-          {activeGift ? <Blocks size={19} /> : creatingGift ? <Plus size={20} /> : <MessageCircle size={19} />}
-        </span>
-        <span className="workspace-copy">
-          <strong>{activeGift?.name ?? (creatingGift ? t('workspace.newGift') : t('workspace.general'))}</strong>
-          <small>{activeGift ? (activeGift.releaseSnapshotId ? t('gift.published') : t('gift.developing')) : creatingGift ? t('workspace.newGiftHint') : t('workspace.generalHint')}</small>
-        </span>
-        {activeGift && <button className="workspace-more" aria-label={t('menu.more')} aria-expanded={toolsOpen} disabled={busy} onClick={() => setToolsOpen(true)}>
+      <PageHeader
+        title={activeGift?.name ?? (creatingGift ? t('workspace.newGift') : t('workspace.general'))}
+        subtitle={activeGift ? giftStatus(activeGift) : creatingGift ? t('workspace.newGiftHint') : t('workspace.generalHint')}
+        backLabel={t('craft.back')} onBack={closeConversation} backDisabled={busy}
+        trailing={activeGift ? <button className="workspace-more" aria-label={t('menu.more')} aria-expanded={toolsOpen} disabled={busy} onClick={() => setToolsOpen(true)}>
           <MoreHorizontal size={23} />
-        </button>}
-      </header>
+        </button> : undefined} />
 
-      <section className={`conversation ${isWelcome ? 'welcome-conversation' : ''}`}>
-        {isWelcome ? <div className="welcome">
-          <CraftMark size="large" />
-          <h1>{t(creatingGift ? 'welcome.title' : 'welcome.generalTitle')}</h1>
-          <p>{t(creatingGift ? 'welcome.subtitle' : 'welcome.generalSubtitle')}</p>
-          <p className="suggestion-label">{t(creatingGift ? 'welcome.suggestions' : 'welcome.generalSuggestions')}</p>
-          <div className="suggestion-list">
-            {suggestions.map(({ key, icon: Icon, prompt }) => <button className="suggestion" key={key} onClick={() => creatingGift ? startPrompt(t(prompt)) : startGeneralPrompt(t(prompt))}>
-              <span className="suggestion-icon"><Icon size={19} /></span><span><strong>{t(`${key}.title`)}</strong><small>{t(`${key}.subtitle`)}</small></span><ChevronRight size={17} />
-            </button>)}
-          </div>
-        </div> : <div className="message-list">
-          {messages.map((message) => <article className={`message ${message.role}`} key={message.id}>
-            {message.role === 'assistant' && <div className="assistant-label"><CraftMark size="small" /><strong>Craft</strong></div>}
-            <div className="message-content">{message.text}</div>
-          </article>)}
-          {status && <div className="working"><LoaderCircle className="spin" size={17} /><span>{statusText}</span></div>}
-          {confirmation && <div className="confirmation">
-            <span className="confirmation-icon"><Rocket size={20} /></span>
-            <div><strong>{confirmation.action}</strong><p>{t('confirm.body')}</p></div>
-            <div className="confirmation-actions">
-              <button onClick={() => { confirmation.resolve(false); setConfirmation(undefined) }}>{t('confirm.cancel')}</button>
-              <button className="primary-button" onClick={() => { confirmation.resolve(true); setConfirmation(undefined) }}><Check size={16} />{t('confirm.ok')}</button>
+      <section className="conversation-wrap">
+        <div ref={conversationRef} className={`conversation ${isWelcome ? 'welcome-conversation' : ''}`} onScroll={onConversationScroll}>
+          {isWelcome ? <div className="welcome">
+            <CraftMark size="large" />
+            <h1>{t(creatingGift ? 'welcome.title' : 'welcome.generalTitle')}</h1>
+            <p>{t(creatingGift ? 'welcome.subtitle' : 'welcome.generalSubtitle')}</p>
+            <p className="suggestion-label">{t(creatingGift ? 'welcome.suggestions' : 'welcome.generalSuggestions')}</p>
+            <div className="suggestion-list">
+              {suggestions.map(({ key, icon: Icon, prompt }) => <button className="suggestion" key={key} onClick={() => creatingGift ? startPrompt(t(prompt)) : startGeneralPrompt(t(prompt))}>
+                <span className="suggestion-icon"><Icon size={19} /></span><span><strong>{t(`${key}.title`)}</strong><small>{t(`${key}.subtitle`)}</small></span><ChevronRight size={17} />
+              </button>)}
             </div>
+          </div> : <div className="message-list">
+            {messages.map((message) => <article className={`message ${message.role}`} key={message.id}>
+              {message.role === 'assistant' && <div className="assistant-label"><CraftMark size="small" /><strong>Craft</strong></div>}
+              {message.role === 'user' ? <div className="message-content">{message.text}</div> : <Markdown text={message.text} />}
+            </article>)}
+            {status && <div className="working"><LoaderCircle className="spin" size={17} /><span>{statusText}</span></div>}
+            {confirmation && <div className="confirmation">
+              <span className="confirmation-icon"><Rocket size={20} /></span>
+              <div><strong>{confirmation.action}</strong><p>{t('confirm.body')}</p></div>
+              <div className="confirmation-actions">
+                <button onClick={() => { confirmation.resolve(false); setConfirmation(undefined) }}>{t('confirm.cancel')}</button>
+                <button className="primary-button" onClick={() => { confirmation.resolve(true); setConfirmation(undefined) }}><Check size={16} />{t('confirm.ok')}</button>
+              </div>
+            </div>}
           </div>}
-          <div ref={messagesEndRef} />
-        </div>}
+        </div>
+        {!isWelcome && !atBottom && <button className="jump-latest" onClick={scrollToLatest}>{t('chat.latest')}</button>}
       </section>
 
       <div className="composer-area">
@@ -615,21 +711,13 @@ export default function App() {
 
     {!settingsOpen && activeTab === 'discover' && <main className="screen tab-screen discover-screen">
       <header className="section-header"><div><h1>{t('discover.title')}</h1><p>{t('discover.subtitle')}</p></div></header>
-      <article className="featured-card">
-        <span className="eyebrow">{t('featured.eyebrow')}</span>
-        <div className="featured-icon"><Timer size={29} /></div>
-        <h2>{t('inspiration.focus.name')}</h2>
-        <p>{t('featured.subtitle')}</p>
-        <button onClick={() => startPrompt(t('inspiration.focus.prompt'))}>{t('featured.cta')}<ArrowUp size={17} /></button>
-      </article>
       <div className="category-tabs" aria-label={t('nav.discover')}>
         {categories.map((category) => <button key={category} className={discoverCategory === category ? 'active' : ''} onClick={() => setDiscoverCategory(category)}>{t(`category.${category}`)}</button>)}
       </div>
-      <section className="inspiration-grid" aria-label={t('nav.discover')}>
-        {filteredInspirations.map(({ id, icon: Icon, tone }) => <button className="inspiration-card" key={id} onClick={() => startPrompt(t(`inspiration.${id}.prompt`))}>
-          <span className={`template-icon ${tone}`}><Icon size={23} /></span>
-          <strong>{t(`inspiration.${id}.name`)}</strong><p>{t(`inspiration.${id}.description`)}</p><span className="use-template">{t('featured.cta')}<ArrowUp size={14} /></span>
-        </button>)}
+      <section className="square-grid" aria-label={t('nav.discover')}>
+        {filteredWorks.map((work) => <SquareCard key={work.id} work={work} language={language} installed={installedWorks.has(work.id)} installing={installing === work.id}
+          onRun={() => void withSquareWork(work, async (gift) => runtime.openRelease(gift.id, gift.name))}
+          onBuild={() => void withSquareWork(work, (gift) => openGift(gift))} />)}
       </section>
     </main>}
 
@@ -643,14 +731,21 @@ export default function App() {
         <span><Lightbulb size={29} /></span><h2>{t('empty.title')}</h2><p>{t('empty.body')}</p>
         <button className="primary-button" onClick={() => startPrompt('')}>{t('empty.cta')}<ArrowUp size={17} /></button>
       </div> : filteredGifts.length === 0 ? <div className="gift-search-empty"><Search size={24} /><p>{t('gifts.noResults')}</p></div> : <section className="gift-list" aria-label={t('gifts.aria')}>
-        {filteredGifts.map((gift, index) => <button className="gift-row" key={gift.id} disabled={busy} onClick={() => continueGift(gift)}>
-          <span className={`gift-icon tone-${index % 4}`}><Blocks size={22} /></span>
-          <span className="gift-info">
-            <span className="gift-title"><strong>{gift.name}</strong></span>
-            <small><i className={gift.releaseSnapshotId ? 'published' : ''} />{gift.releaseSnapshotId ? t('gift.published') : t('gift.developing')} · {new Intl.DateTimeFormat(locale, { month: 'short', day: 'numeric' }).format(gift.updatedAt)}</small>
-          </span>
-          <ChevronRight className="gift-chevron" size={17} />
-        </button>)}
+        {filteredGifts.map((gift, index) => {
+          const work = gift.squareId ? workBySquareId.get(gift.squareId) : undefined
+          const Icon = work?.icon ?? Blocks
+          const confirming = deleteCandidate === gift.id
+          return <button className={`gift-row ${confirming ? 'confirming' : ''}`} key={gift.id} disabled={busy}
+            onClick={() => (confirming ? void deleteGift(gift) : openGiftEntry(gift))}
+            onContextMenu={(event) => { event.preventDefault(); setDeleteCandidate(confirming ? undefined : gift.id) }}>
+            <span className={`gift-icon tone-${work?.tone ?? tones[index % tones.length]}`}><Icon size={22} /></span>
+            <span className="gift-info">
+              <span className="gift-title"><strong>{confirming ? t('gift.deleteTapHint', { name: gift.name }) : gift.name}</strong></span>
+              <small><i className={gift.releaseSnapshotId && !gift.hasDraft ? 'published' : ''} />{giftStatus(gift)} · {new Intl.DateTimeFormat(locale, { month: 'short', day: 'numeric' }).format(gift.updatedAt)}</small>
+            </span>
+            {gift.releaseSnapshotId ? <Play className="gift-run" size={18} /> : <ChevronRight className="gift-chevron" size={17} />}
+          </button>
+        })}
       </section>}
     </main>}
 
@@ -659,11 +754,6 @@ export default function App() {
       <p className="menu-label profile-menu-label">{t('profile.settings')}</p>
       <section className="settings-list">
         <button onClick={() => setSettingsOpen(true)}><span className="settings-icon"><Sparkles size={19} /></span><span><strong>{t('profile.model')}</strong><small>{config.model || t('profile.modelHint')}</small></span><ChevronRight size={18} /></button>
-        <div className="language-row"><span className="settings-icon"><Languages size={19} /></span><span><strong>{t('profile.language')}</strong></span>
-          <div className="effort-options language-options" role="group" aria-label={t('profile.language')}>
-            {(['zh', 'en'] as const).map((option) => <button key={option} type="button" className={language === option ? 'active' : ''} aria-pressed={language === option} onClick={() => setLanguage(option)}>{option === 'zh' ? '中文' : 'English'}</button>)}
-          </div>
-        </div>
       </section>
       <p className="menu-label">{t('profile.about')}</p>
       <section className="settings-list static-list">
@@ -689,17 +779,14 @@ export default function App() {
         {conversationOpen && activeGift && <>
           <button role="menuitem" onClick={() => { setToolsOpen(false); setVersionsOpen(true) }}><FolderGit2 size={18} /><span>{t('menu.versions')}</span><ChevronRight size={15} /></button>
           {activeGift.releaseSnapshotId && <button role="menuitem" onClick={() => { setToolsOpen(false); void runtime.openRelease(activeGift.id, activeGift.name) }}><Play size={18} /><span>{t('menu.openRelease')}</span><ChevronRight size={15} /></button>}
+          {activeGift.hasDraft && <button role="menuitem" onClick={() => { setToolsOpen(false); void runtime.openDraft(activeGift.id, activeGift.name) }}><Play size={18} /><span>{t('menu.openDraft')}</span><ChevronRight size={15} /></button>}
           <button className={`danger-menu-item ${deleteCandidate === activeGift.id ? 'confirming' : ''}`} role="menuitem" disabled={busy} onClick={() => void deleteGift(activeGift)}><Trash2 size={18} /><span>{deleteCandidate === activeGift.id ? t('gift.deleteConfirm') : t('gift.delete', { name: activeGift.name })}</span></button>
         </>}
       </section>
     </>}
 
     {settingsOpen && <main className="screen settings-page">
-      <header className="page-header">
-        <button className="page-back" aria-label={t('settings.back')} onClick={() => setSettingsOpen(false)}><ArrowLeft size={22} /></button>
-        <h1>{t('settings.title')}</h1>
-        <span className="page-header-spacer" />
-      </header>
+      <PageHeader title={t('settings.title')} backLabel={t('settings.back')} onBack={() => setSettingsOpen(false)} />
       <div className="settings-page-content">
         <form className="settings-form" onSubmit={(event) => void saveSettings(event)}>
           <section className="settings-group" aria-label={t('settings.service')}>
@@ -708,8 +795,8 @@ export default function App() {
               <label>API Key<div className="field"><input type="password" autoComplete="off" placeholder="sk-…" value={config.apiKey} onChange={(event) => setConfig({ ...config, apiKey: event.target.value })} /></div></label>
               <label>{t('settings.baseUrl')}<div className="field"><input inputMode="url" placeholder="https://…/v1/chat/completions" value={config.baseUrl} onChange={(event) => setConfig({ ...config, baseUrl: event.target.value })} /></div></label>
               <label>{t('settings.model')}<div className="field"><input placeholder={t('settings.modelPlaceholder')} value={config.model} onChange={(event) => setConfig({ ...config, model: event.target.value })} /></div></label>
-              <label>{t('settings.contextWindow')}<div className="field"><input type="number" inputMode="numeric" min={8000} step={1000} placeholder="1000000" value={config.contextWindow ?? ''} onChange={(event) => { const raw = event.target.value; const parsed = Number(raw); setConfig({ ...config, contextWindow: raw === '' || !Number.isFinite(parsed) ? undefined : Math.floor(parsed) }) }} /></div></label>
-              <label>{t('settings.compactionPercent')}<div className="field"><input type="number" inputMode="numeric" min={5} max={95} step={5} placeholder="30" value={config.compactionPercent ?? ''} onChange={(event) => { const raw = event.target.value; const parsed = Number(raw); setConfig({ ...config, compactionPercent: raw === '' || !Number.isFinite(parsed) ? undefined : Math.floor(parsed) }) }} /></div></label>
+              <label>{t('settings.contextWindow')}<div className="field"><input type="number" inputMode="numeric" min="8000" step="1000" placeholder="1000000" value={config.contextWindow ?? ''} onChange={(event) => { const raw = event.target.value; const parsed = Number(raw); setConfig({ ...config, contextWindow: raw === '' || !Number.isFinite(parsed) ? undefined : Math.floor(parsed) }) }} /></div></label>
+              <label>{t('settings.compactionPercent')}<div className="field"><input type="number" inputMode="numeric" min="5" max="95" step="5" placeholder="30" value={config.compactionPercent ?? ''} onChange={(event) => { const raw = event.target.value; const parsed = Number(raw); setConfig({ ...config, compactionPercent: raw === '' || !Number.isFinite(parsed) ? undefined : Math.floor(parsed) }) }} /></div></label>
             </div>
           </section>
           <section className="settings-group" aria-label={t('settings.generation')}>
