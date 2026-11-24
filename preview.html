@@ -1,0 +1,29 @@
+<!doctype html>
+<!-- Dev harness: renders one Square work exactly like PreviewActivity does (runtime script +
+   work bundle, same base CSS, storage namespaced by CRAFT_CONTEXT). Not part of the app build.
+   Usage: http://127.0.0.1:5173/preview.html?work=<id> -->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Craft Square preview</title>
+    <style>
+      html, body { margin: 0; padding: 0; min-height: 100%; background: #f2f4ee; color: #19251f; font-family: -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased; }
+      * { box-sizing: border-box; }
+      body { touch-action: manipulation; }
+      #root { min-height: 100vh; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script>
+      const work = new URLSearchParams(location.search).get('work') || 'focus'
+      window.CRAFT_CONTEXT = { giftId: `square-preview:${work}`, environment: 'release' }
+      for (const [tag, attributes] of [
+        ['link', { rel: 'stylesheet', href: `/square/${work}/dist/app.css` }],
+        ['script', { src: '/craft-runtime.js', async: false }],
+        ['script', { src: `/square/${work}/dist/app.js`, async: false }],
+      ]) document.head.append(Object.assign(document.createElement(tag), attributes))
+    </script>
+  </body>
+</html>

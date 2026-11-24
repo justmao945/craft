@@ -7,7 +7,8 @@
   "scripts": {
     "dev": "npm run runtime:build && vite",
     "runtime:build": "node scripts/build-runtime.mjs",
-    "build": "npm run runtime:build && tsc -b && vite build",
+    "square:build": "node scripts/squarePlugin.ts",
+    "build": "npm run runtime:build && npm run square:build && tsc -b && vite build",
     "lint": "oxlint src vite.config.ts capacitor.config.ts",
     "preview": "vite preview",
     "cap:sync": "cap sync android",
@@ -16,12 +17,15 @@
   "dependencies": {
     "@capacitor/android": "^7.6.10",
     "@capacitor/app": "^7.1.2",
+    "@capacitor/browser": "^7.0.5",
     "@capacitor/core": "^7.6.10",
     "@capacitor/splash-screen": "^7.0.5",
     "esbuild-wasm": "^0.28.2",
     "lucide-react": "^1.72.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
     "zod": "^4.6.7"
   },
   "devDependencies": {

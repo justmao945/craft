@@ -1,0 +1,814 @@
+/*
+ * Travel journal. Every colour is a token: light values on :root, dark overrides in the media query.
+ * Cover tints split the same way: saturation and lightness are tokens, each trip brings its own hue in --cover-h.
+ */
+:root {
+  color-scheme: light;
+  --bg: #f6f4fa;
+  --surface: #ffffff;
+  --surface-2: #f1eef6;
+  --text: #1c1922;
+  --text-2: #625c6e;
+  --text-3: #6b657c;
+  --border: #e4e0ec;
+  --accent: #7c5cd6;
+  --on-accent: #ffffff;
+  --accent-soft: #ede7fb;
+  --accent-ink: #5a3db6;
+  --danger: #c22f45;
+  --on-danger: #ffffff;
+  --danger-soft: #fbedf0;
+  --ongoing: #1c7a4a;
+  --scrim: rgba(24, 18, 34, 0.45);
+  --shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+  --cover-s1: 76%;
+  --cover-l1: 91%;
+  --cover-s2: 60%;
+  --cover-l2: 82%;
+  --cover-ink-s: 45%;
+  --cover-ink-l: 22%;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --bg: #141218;
+    --surface: #1e1b24;
+    --surface-2: #2a2633;
+    --text: #f2eff7;
+    --text-2: #b7b0c5;
+    --text-3: #a49cb6;
+    --border: #343040;
+    --accent: #a98cff;
+    --on-accent: #1c1430;
+    --accent-soft: #2e2546;
+    --accent-ink: #c9b7ff;
+    --danger: #ff8c9d;
+    --on-danger: #3a0d16;
+    --danger-soft: #3a2129;
+    --ongoing: #74d89e;
+    --scrim: rgba(0, 0, 0, 0.6);
+    --shadow: none;
+    --cover-s1: 36%;
+    --cover-l1: 28%;
+    --cover-s2: 32%;
+    --cover-l2: 22%;
+    --cover-ink-s: 55%;
+    --cover-ink-l: 86%;
+  }
+}
+
+/* ---------- base ---------- */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', Roboto, sans-serif;
+  font-size: 15px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+  overflow-wrap: anywhere;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+:is(.btn, .icon-btn, .mood-chip, [role='button']):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.icon {
+  display: block;
+  width: 20px;
+  height: 20px;
+  flex: none;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* The page itself: safe areas are padded here, --keyboard adds scroll room on hosts whose viewport does not shrink. */
+.app {
+  min-height: 100vh;
+  padding: 0 env(safe-area-inset-right) calc(24px + env(safe-area-inset-bottom) + var(--keyboard, 0px)) env(safe-area-inset-left);
+  background: var(--bg);
+  overflow-x: clip;
+}
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: calc(8px + env(safe-area-inset-top)) 16px 8px;
+  background: var(--bg);
+}
+
+.page-title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.topbar-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 16px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.content {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  padding: 4px 16px 0;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: var(--shadow);
+}
+
+.card.dashed {
+  border-style: dashed;
+  box-shadow: none;
+}
+
+.card.fresh {
+  outline: 3px solid transparent;
+  animation: fresh 1.6s ease-out;
+}
+
+@keyframes fresh {
+  from {
+    outline-color: var(--accent);
+  }
+  to {
+    outline-color: transparent;
+  }
+}
+
+/* ---------- buttons and fields ---------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: transform 0.12s ease, opacity 0.15s ease;
+}
+
+.btn:active {
+  transform: scale(0.97);
+}
+
+.btn[disabled] {
+  opacity: 0.4;
+  transform: none;
+  cursor: default;
+}
+
+.btn-primary {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.btn-danger {
+  background: var(--danger);
+  color: var(--on-danger);
+}
+
+.btn-ghost {
+  background: var(--surface);
+}
+
+.btn-pill {
+  flex: none;
+  padding: 0 14px 0 12px;
+  border-radius: 999px;
+  font-size: 14px;
+}
+
+.icon-btn {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  flex: none;
+  padding: 0;
+  border: 0;
+  border-radius: 12px;
+  background: none;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: background-color 0.15s ease, transform 0.12s ease;
+}
+
+.icon-btn:active {
+  background: var(--surface-2);
+  transform: scale(0.94);
+}
+
+.field {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  min-width: 0;
+}
+
+.label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.counter {
+  flex: none;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.counter.limit {
+  color: var(--danger);
+}
+
+.error {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--danger);
+}
+
+.input {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 16px;
+  transition: border-color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.input::placeholder {
+  color: var(--text-3);
+  opacity: 1;
+}
+
+.input:focus,
+.input-area:focus-within {
+  outline: none;
+  border-color: var(--accent);
+  background: var(--surface);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.input[aria-invalid='true'] {
+  border-color: var(--danger);
+}
+
+.input-wrap {
+  position: relative;
+  display: block;
+}
+
+.input-wrap > .icon {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  color: var(--text-3);
+  pointer-events: none;
+}
+
+.input-wrap.leading > .input {
+  padding-left: 40px;
+}
+
+.input-wrap.trailing > .icon {
+  left: auto;
+  right: 10px;
+}
+
+.input-wrap.trailing > .input {
+  padding-right: 38px;
+}
+
+/* The whole date field opens the native picker; the calendar glyph is drawn here instead. */
+.input[type='date'] {
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.input[type='date']::-webkit-calendar-picker-indicator {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+/* ---------- trip card ---------- */
+
+.trip {
+  position: relative;
+  overflow: hidden;
+  cursor: pointer;
+  scroll-margin-top: 72px;
+  transition: transform 0.12s ease;
+}
+
+.trip:active {
+  transform: scale(0.985);
+}
+
+.cover {
+  height: 56px;
+  padding: 0 8px 0 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: hsl(var(--cover-h) var(--cover-ink-s) var(--cover-ink-l));
+  background: linear-gradient(
+    110deg,
+    hsl(var(--cover-h) var(--cover-s1) var(--cover-l1)),
+    hsl(calc(var(--cover-h) + 32) var(--cover-s2) var(--cover-l2))
+  );
+}
+
+.cover-lg {
+  height: 76px;
+  padding-left: 16px;
+}
+
+.cover-label {
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.cover-mark {
+  width: 44px;
+  height: 44px;
+  flex: none;
+  opacity: 0.45;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  flex: none;
+  padding: 0 11px 0 8px;
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ongoing);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  box-shadow: var(--shadow);
+}
+
+.badge::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.trip-body {
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  padding: 12px 14px 14px;
+}
+
+.trip-title {
+  margin: 0 0 3px;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 2px 6px;
+  min-width: 0;
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.meta > .icon {
+  margin-top: -0.5px;
+  color: var(--text-3);
+}
+
+.meta-text {
+  min-width: 0;
+}
+
+/* ---------- trip detail ---------- */
+
+.hero {
+  overflow: hidden;
+}
+
+.hero-body {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  padding: 14px 16px 16px;
+}
+
+.hero-title {
+  margin: 0 0 4px;
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.section-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 10px 4px 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.section-title > .count {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.empty {
+  display: grid;
+  justify-items: center;
+  align-content: start;
+  gap: 4px;
+  padding: 28px 20px;
+  text-align: center;
+}
+
+.empty > .icon {
+  width: 40px;
+  height: 40px;
+  margin-bottom: 8px;
+  color: var(--accent-ink);
+  stroke-width: 1.5;
+}
+
+.empty-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.empty-hint {
+  max-width: 26em;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-2);
+}
+
+/* Loading placeholders: same rhythm as the cards they turn into. */
+[aria-busy='true'] {
+  display: grid;
+  gap: 12px;
+}
+
+.skeleton {
+  height: 140px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--surface-2);
+  animation: pulse 1.2s ease-in-out infinite alternate;
+}
+
+@keyframes pulse {
+  to {
+    opacity: 0.45;
+  }
+}
+
+.day {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+}
+
+.day-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 32px;
+  padding: 6px 4px 0;
+}
+
+.day-date {
+  min-width: 0;
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.weekday {
+  margin-left: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-2);
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.entry {
+  display: grid;
+  align-content: start;
+  gap: 4px;
+  /* The 44px delete target reaches into the right padding, so its glyph keeps a normal margin. */
+  padding: 8px 6px 12px 14px;
+  scroll-margin: 72px 0 24px;
+}
+
+.entry-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+}
+
+.mood {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  flex: none;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  font-size: 18px;
+  line-height: 1;
+}
+
+.entry-place {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.entry-time {
+  flex: none;
+  font-size: 12px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.entry-text {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.confirm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  padding: 6px 6px 6px 12px;
+  border-radius: 12px;
+  background: var(--danger-soft);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.confirm > span {
+  flex: 1;
+  min-width: 0;
+}
+
+/* ---------- composer ---------- */
+
+.composer {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  padding: 12px;
+}
+
+.moods {
+  display: flex;
+  gap: 4px;
+}
+
+.mood-chip {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease, transform 0.12s ease;
+}
+
+.mood-chip[aria-pressed='true'] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.mood-chip:active {
+  transform: scale(0.92);
+}
+
+.input-area {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-2);
+  transition: border-color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.textarea {
+  display: block;
+  width: 100%;
+  min-height: 78px;
+  padding: 10px 12px 4px;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font-size: 16px;
+  line-height: 1.45;
+  resize: none;
+  outline: none;
+}
+
+.textarea::placeholder {
+  color: var(--text-3);
+  opacity: 1;
+}
+
+.composer-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 4px 6px 6px 12px;
+}
+
+/* ---------- new trip modal ---------- */
+
+.modal {
+  position: fixed;
+  inset: 0 0 var(--keyboard, 0px) 0;
+  z-index: 20;
+  display: flex;
+  overflow-y: auto;
+  padding: calc(16px + env(safe-area-inset-top)) calc(16px + env(safe-area-inset-right)) calc(16px + env(safe-area-inset-bottom))
+    calc(16px + env(safe-area-inset-left));
+  background: var(--scrim);
+  animation: fade 0.18s ease-out;
+}
+
+.modal-card {
+  margin: auto;
+  width: 100%;
+  max-width: 420px;
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  padding: 18px 16px 16px;
+  animation: rise 0.22s ease-out;
+}
+
+.modal-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.field-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}
